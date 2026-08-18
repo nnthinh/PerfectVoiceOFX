@@ -7,7 +7,7 @@
 # Never defaults to /Library. Refuses --system.
 #
 # Engine payload is hello-engine (Mach-O spawn contract) unless --engine-dir
-# points at a later PyInstaller onedir. No user Python. No Demucs weights.
+# points at a later PyInstaller onedir. No user Python. No Demucs/DFN weights.
 #
 # Codesign / notary: optional. Missing Developer ID does not fail the build
 # (this machine has none). Commands: installer/macos/README.md
@@ -43,8 +43,10 @@ usage: $0 [options]
   --out-dir DIR     Where to write the product pkg (default: installer/macos/dist)
   -h, --help
 
-Refuses --system / /Library. Does not bundle Demucs weights.
+Refuses --system / /Library / EUID 0 on --install.
+Does not bundle Demucs/DFN weights (including *.onnx).
 Does not require a user Python. Does not fail without Developer ID.
+Supported installer CLI: -target CurrentUserHomeDirectory (not -target /).
 EOF
 }
 
@@ -85,6 +87,12 @@ if [ ! -f "$entitlements" ]; then
   exit 1
 fi
 
+if [ "$do_install" -eq 1 ] && [ "$(id -u)" -eq 0 ]; then
+  echo "refusing: will not install as root (user-space only; no /Library, no root-owned ~/Library)." >&2
+  echo "omit sudo; run installer/macos/install-user.sh as the editor account." >&2
+  exit 2
+fi
+
 log() { printf '%s\n' "$*"; }
 
 developer_id_app() {
@@ -108,9 +116,10 @@ forbid_weights() {
   hits="$(find "$root" -type f \( \
       -name '*.th' -o -name '*.bin' -o -name '*.safetensors' \
       -o -name '*.ckpt' -o -name '*.pt' -o -name '*.pth' \
+      -o -name '*.onnx' -o -name '*.onnx.data' \
     \) -print 2>/dev/null || true)"
   if [ -n "$hits" ]; then
-    echo "refusing: model weights in payload (installer must not bundle Demucs):" >&2
+    echo "refusing: model weights in payload (installer must not bundle Demucs/DFN):" >&2
     printf '%s\n' "$hits" >&2
     exit 1
   fi
@@ -155,8 +164,60 @@ verify_stage() {
   fi
 }
 
-maybe_sign_engine() {
+require_00c_entitlements() {
   local bin="$1"
+  local dump
+  dump="$(codesign -d --entitlements :- "$bin" 2>/dev/null || true)"
+  local missing=0
+  local key
+  for key in \
+    com.apple.security.cs.disable-library-validation \
+    com.apple.security.cs.allow-jit \
+    com.apple.security.cs.allow-unsigned-executable-memory \
+    com.apple.security.network.client
+  do
+    if ! printf '%s' "$dump" | grep -q "$key"; then
+      echo "missing 00c entitlement on $bin: $key" >&2
+      missing=1
+    fi
+  done
+  if [ "$missing" -ne 0 ]; then
+    echo "codesign -d --entitlements did not show the four 00c keys" >&2
+    exit 1
+  fi
+}
+
+# 00c §8: dylib/.so first, other Mach-Os, then entry with entitlements-engine.plist.
+deep_sign_onedir() {
+  local onedir="$1"
+  local ident="$2"
+  local ts=()
+  if [ "$sign" -eq 1 ]; then
+    ts=(--timestamp)
+  else
+    ts=(--timestamp=none)
+  fi
+
+  local f
+  while IFS= read -r -d '' f; do
+    codesign --force --options runtime "${ts[@]}" --sign "$ident" "$f"
+  done < <(find "$onedir" -type f \( -name '*.dylib' -o -name '*.so' -o -name '*.so.*' \) -print0)
+
+  while IFS= read -r -d '' f; do
+    file "$f" | grep -q 'Mach-O' || continue
+    codesign --force --options runtime "${ts[@]}" --sign "$ident" "$f"
+  done < <(find "$onedir" -type f -perm +111 ! -name 'perfectvoice-engine' \
+      ! -name '*.dylib' ! -name '*.so' ! -name '*.so.*' -print0)
+
+  codesign --force --options runtime "${ts[@]}" \
+    --entitlements "$entitlements" --sign "$ident" \
+    "$onedir/perfectvoice-engine"
+  require_00c_entitlements "$onedir/perfectvoice-engine"
+}
+
+maybe_sign_engine() {
+  local onedir="$1"
+  local bin="$onedir/perfectvoice-engine"
   local ident=""
   if [ "$sign" -eq 1 ]; then
     ident="$(developer_id_app || true)"
@@ -164,8 +225,13 @@ maybe_sign_engine() {
       log "no Developer ID Application; leaving engine unsigned (cannot notarize on this machine)"
       return 0
     fi
-    codesign --force --options runtime --timestamp \
-      --entitlements "$entitlements" --sign "$ident" "$bin"
+    if [ -n "$engine_dir" ]; then
+      deep_sign_onedir "$onedir" "$ident"
+    else
+      codesign --force --options runtime --timestamp \
+        --entitlements "$entitlements" --sign "$ident" "$bin"
+      require_00c_entitlements "$bin"
+    fi
     log "signed engine with $ident"
     return 0
   fi
@@ -175,8 +241,13 @@ maybe_sign_engine() {
       log "no Apple Development identity; leaving engine unsigned"
       return 0
     fi
-    codesign --force --options runtime --timestamp=none \
-      --entitlements "$entitlements" --sign "$ident" "$bin"
+    if [ -n "$engine_dir" ]; then
+      deep_sign_onedir "$onedir" "$ident"
+    else
+      codesign --force --options runtime --timestamp=none \
+        --entitlements "$entitlements" --sign "$ident" "$bin"
+      require_00c_entitlements "$bin"
+    fi
     log "signed engine with $ident (Apple Development, not Developer ID; not notarized)"
   fi
 }
@@ -221,6 +292,7 @@ stage_payload() {
     rsync -a \
       --exclude '*.th' --exclude '*.bin' --exclude '*.safetensors' \
       --exclude '*.ckpt' --exclude '*.pt' --exclude '*.pth' \
+      --exclude '*.onnx' --exclude '*.onnx.data' \
       --exclude '__pycache__' --exclude '.DS_Store' \
       "$engine_dir/" "$root/$engine_rel/"
     log "staged engine from onedir: $engine_dir"
@@ -231,7 +303,7 @@ stage_payload() {
     log "staged hello-engine stub (production engine is a PyInstaller onedir later)"
   fi
   chmod 755 "$root/$engine_rel/perfectvoice-engine"
-  maybe_sign_engine "$root/$engine_rel/perfectvoice-engine"
+  maybe_sign_engine "$root/$engine_rel"
 
   rsync -a \
     --exclude 'WorkflowIntegration.node' \
@@ -289,7 +361,7 @@ verify_pkg() {
   local component="$1"
   local listing
   listing="$(pkgutil --payload-files "$component")"
-  if printf '%s\n' "$listing" | grep -E '\.(th|bin|safetensors|ckpt|pt|pth)$' >/dev/null; then
+  if printf '%s\n' "$listing" | grep -E '\.(th|bin|safetensors|ckpt|pt|pth|onnx|onnx\.data)$' >/dev/null; then
     echo "refusing: weights inside component pkg" >&2
     exit 1
   fi
@@ -331,7 +403,7 @@ build_pkg() {
   cp "$macos/resources/welcome.txt" "$resources/"
   cp "$macos/resources/conclusion.txt" "$resources/"
   cp "$repo/LICENSE" "$resources/LICENSE.txt"
-  chmod +x "$macos/scripts/postinstall"
+  chmod +x "$macos/scripts/preinstall" "$macos/scripts/postinstall"
 
   pkgbuild \
     --root "$root" \
@@ -358,6 +430,11 @@ install_user() {
   local root="$1"
   local dest_engine="$HOME/$engine_rel"
   local dest_panel="$HOME/$panel_rel"
+
+  if [ "$(id -u)" -eq 0 ]; then
+    echo "refusing: will not install as root (user-space only; no /Library, no root-owned ~/Library)." >&2
+    exit 2
+  fi
 
   mkdir -p "$dest_engine" "$dest_panel"
   rsync -a "$root/$engine_rel/" "$dest_engine/"

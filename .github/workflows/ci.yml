@@ -38,3 +38,5 @@ jobs:
         run: node --test host/com.perfectvoice.panel/resolve/*.test.js
       - name: macOS pkg dry-run (unsigned, no weights, no user Python)
         run: bash installer/macos/build-pkg.sh --dry-run
+      - name: macOS pkg policy (no /Library, no weights, no user Python)
+        run: bash installer/macos/check-policy.sh

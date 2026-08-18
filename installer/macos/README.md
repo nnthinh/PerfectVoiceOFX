@@ -18,10 +18,10 @@ Fallback `/Library/Application Support/PerfectVoice/engine/perfectvoice-engine` 
 ## Payload
 
 - **Engine:** `hello-engine` (Mach-O, contract spawn / `READY` / `GET /v1/health`). **Không** phải Demucs. Production engine là **PyInstaller onedir** — build sau bằng `--engine-dir DIR`.
-- **Không** bundle official `htdemucs*` / `.th` / `.safetensors`. User click *Download model* (PR 15).
+- **Không** bundle official `htdemucs*` / `.th` / `.safetensors` / DeepFilterNet `*.onnx`. User click *Download model* (PR 15). `--engine-dir` **fail-closed** nếu onedir còn checkpoint.
 - **Không** yêu cầu user Python / conda.
-- **Không** bundle `WorkflowIntegration.node` (copy từ Resolve đang cài lúc postinstall).
-- Codesign engine (khi có identity) dùng entitlement 00c: `cs.disable-library-validation`, `cs.allow-jit`, `cs.allow-unsigned-executable-memory`, `network.client`.
+- **Không** bundle `WorkflowIntegration.node` (copy từ Resolve đang cài lúc postinstall, chỉ ghi user panel).
+- Codesign: `--engine-dir --sign` deep-sign onedir (dylib/`.so` trước, entry + entitlement 00c sau) như [`docs/spikes/notarize.md`](../../docs/spikes/notarize.md) §8. Thiếu bốn key 00c trên binary entry → fail. Không có Developer ID → unsigned, exit 0.
 
 ## Lệnh
 
@@ -36,6 +36,7 @@ bash installer/macos/build-pkg.sh
 # cài user-space ngay (rsync, không sudo, không Installer.app)
 bash installer/macos/install-user.sh
 # tương đương: bash installer/macos/build-pkg.sh --install
+# sudo / EUID 0 → exit 2 (tránh root-owned ~/Library)
 
 # khi đã có PyInstaller onedir
 bash installer/macos/build-pkg.sh --engine-dir /path/to/onedir
@@ -81,7 +82,7 @@ codesign --force --options runtime --timestamp \
 codesign --verify --verbose=2 "$ONEDIR/perfectvoice-engine"
 ```
 
-Hoặc build onedir ở chỗ khác rồi `build-pkg.sh --engine-dir … --sign` (script gọi `codesign` với cùng `$ENT` khi có Developer ID).
+Hoặc build onedir ở chỗ khác rồi `build-pkg.sh --engine-dir … --sign` — script **deep-sign** cả cây (dylib/`.so`/Mach-O phụ, rồi entry với `$ENT`) khi có Developer ID. Sau đó `codesign -d --entitlements` phải có đủ bốn key 00c.
 
 ### 2. Ký product `.pkg` bằng Developer ID Installer
 
@@ -117,11 +118,14 @@ Zip onedir (`ditto -c -k`) chỉ để notary engine lẻ — **không staple đ
 
 ## Cài / gỡ
 
+CLI **duy nhất** được hỗ trợ cho Installer.app/`installer`(8):
+
 ```bash
-bash installer/macos/install-user.sh
-# hoặc, khi pkg đã currentUserHome + auth=none:
-# installer -pkg installer/macos/dist/PerfectVoice-0.1.0-arm64.pkg \
-#   -target CurrentUserHomeDirectory
+bash installer/macos/install-user.sh   # rsync user-space; cấm sudo
+installer -pkg installer/macos/dist/PerfectVoice-0.1.0-arm64.pkg \
+  -target CurrentUserHomeDirectory
 ```
+
+`sudo installer -pkg … -target /` **bị từ chối** ở `preinstall` (exit 2) — payload không được extract vào `/Library` (Audiio / GrokDavinci / SamplePlugin). `postinstall` cũng exit 2 trên dest hệ thống; không remap về `~user`.
 
 Gỡ: xóa hai thư mục user-space ở bảng path. Giữ `~/Library/Application Support/PerfectVoice/models/` và cache trừ khi muốn xóa hết.
