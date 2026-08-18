@@ -9,7 +9,8 @@ info:
     0600 one-shot token file (or stdin). `protocol_version` is an integer:
     panel and engine must match major; engine minor ≥ panel.
 
-    `POST /v1/models/download` is **not** in this revision (PR 15).
+    `POST /v1/models/download` is user-click only. Jobs and `Separator()`
+    never call it.
 servers:
   - url: http://127.0.0.1
     description: Engine sidecar (port chosen at spawn; printed on READY line)
@@ -48,6 +49,59 @@ paths:
                 $ref: "#/components/schemas/Capabilities"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /v1/models/download:
+    post:
+      tags: [meta]
+      summary: User-click official Demucs weight download
+      operationId: downloadModel
+      description: |
+        Body `{ name }` (`htdemucs` or `htdemucs_ft`). Allowlisted hosts
+        only; sha256 verified into `local_repo`. Not invoked from
+        `POST /v1/jobs` or `Separator()`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  enum: [htdemucs, htdemucs_ft]
+      responses:
+        "200":
+          description: Files written and checksummed (JSON or SSE `done`)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [name, ready, files]
+                properties:
+                  name:
+                    type: string
+                  ready:
+                    type: boolean
+                  files:
+                    type: object
+                    additionalProperties:
+                      type: string
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          description: Allowlisted fetch or checksum failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/jobs:
     post:

@@ -34,13 +34,14 @@ Installer **không** chứa official `htdemucs*` checkpoints.
 2. File nằm local (`~/Library/Application Support/PerfectVoice/models/demucs/` trên macOS).
 3. Infer chỉ `Separator(..., repo=<local path>)`. Không auto-fetch khi chạy job.
 
-Dev được phép tải official weights bằng `scripts/download_demucs.py` (chưa có trong PR này).
+Dev được phép tải official weights bằng `scripts/download_demucs.py`.
+User click *Download model* → `POST /v1/models/download` (cùng fetcher).
 
 Official weights **không** MIT. Alexandre Défossez, [facebookresearch/demucs#327](https://github.com/facebookresearch/demucs/issues/327) (2022-05-23): *“The model weights are not covered by the MIT license, and are provided only for scientific purposes.”* Click *Download model* không tạo sublicense. Chi tiết: [NOTICE](NOTICE), [docs/licenses/](docs/licenses/).
 
 ## Cây repo (skeleton)
 
-Logic engine, panel JS, và download script **chưa** có — chỉ placeholder.
+Panel JS **chưa** có. Engine sidecar + user-click weight fetch đã có.
 
 ```
 docs/design.md                 # design (rev 4)
@@ -49,11 +50,11 @@ host/com.perfectvoice.panel/   # Workflow Integration (trống)
 engine/perfectvoice_engine/    # localhost sidecar (`perfectvoice-engine serve`)
 engine/models/                 # không commit weights
 shared/schema/                 # clip / params / job / hash-fields JSON Schema v1
-shared/openapi.yaml            # localhost HTTP sketch (no /v1/models/download yet)
+shared/openapi.yaml            # localhost HTTP including POST /v1/models/download
 installer/macos/
 installer/windows/
-scripts/                       # CI URL gate; fetch scripts sau
-tests/unit/                    # python3 -m unittest tests/unit/test_schemas.py
+scripts/                       # CI URL gate; download_demucs.py
+tests/unit/                    # python3 -m unittest tests.unit.test_schemas
 tests/golden/
 ```
 
@@ -63,7 +64,7 @@ tests/golden/
 
 ```
 python3 -m pip install -r requirements-dev.txt
-python3 -m unittest tests.unit.test_schemas tests.unit.test_serve tests.unit.test_resample_sync
+python3 -m unittest tests.unit.test_schemas tests.unit.test_serve tests.unit.test_weight_fetch tests.unit.test_resample_sync
 ```
 
 ## License

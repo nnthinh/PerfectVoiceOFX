@@ -32,6 +32,8 @@ from referencing import Registry, Resource
 
 from perfectvoice_engine import PROTOCOL_VERSION
 from perfectvoice_engine import __version__ as ENGINE_VERSION
+from perfectvoice_engine.models import ALLOWED_MODELS, default_local_repo
+from perfectvoice_engine.weight_fetch import WeightFetchError, download_model
 
 ALLOWED_BIND = "127.0.0.1"
 TOKEN_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -393,7 +395,7 @@ class JobStore:
             ev = event_for(job)
             cancel_event = job.cancel_event
             self._notify_locked(job, ev)
-        # Hold so cancel can win. Do not call Demucs / ffmpeg.
+        # Hold so cancel can win. Do not call Demucs / ffmpeg / weight fetch.
         cancel_event.wait(timeout=STUB_HOLD_SECONDS)
         with self._lock:
             if job.status in TERMINAL:
@@ -427,10 +429,13 @@ class EngineHTTPServer(ThreadingHTTPServer):
         token: str,
         store: JobStore,
         idle_seconds: int,
+        local_repo: Path | None = None,
     ) -> None:
         self.token = token
         self.store = store
         self.idle_seconds = idle_seconds
+        self.local_repo = Path(local_repo) if local_repo is not None else default_local_repo()
+        self.download_lock = threading.Lock()
         self.last_request = time.monotonic()
         super().__init__(server_address, EngineHandler)
 
@@ -507,6 +512,9 @@ class EngineHandler(BaseHTTPRequestHandler):
         if path == "/v1/jobs":
             self._create_job()
             return
+        if path == "/v1/models/download":
+            self._download_model()
+            return
         m = JOB_CANCEL.match(path)
         if m:
             self._cancel_job(m.group(1))
@@ -539,6 +547,76 @@ class EngineHandler(BaseHTTPRequestHandler):
             return json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("invalid json") from exc
+
+    def _download_model(self) -> None:
+        # User-click only. Jobs / Separator never call download_model().
+        try:
+            body = self._read_json()
+        except ValueError as exc:
+            self._json(400, {"error": "validation_error", "detail": str(exc)})
+            return
+        if not isinstance(body, dict):
+            self._json(400, {"error": "validation_error", "detail": "object required"})
+            return
+        extra = set(body) - {"name"}
+        if extra or "name" not in body:
+            self._json(400, {"error": "validation_error", "detail": "expected {name}"})
+            return
+        name = body["name"]
+        if not isinstance(name, str) or name not in ALLOWED_MODELS:
+            self._json(400, {"error": "validation_error", "detail": "unknown model"})
+            return
+        want_sse = "text/event-stream" in (self.headers.get("Accept") or "")
+        started_sse = False
+
+        def progress(filename: str, done: int, total: int) -> None:
+            nonlocal started_sse
+            if not want_sse:
+                return
+            if not started_sse:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                started_sse = True
+            self._write_sse(
+                {
+                    "event": "progress",
+                    "data": {
+                        "filename": filename,
+                        "bytes_done": done,
+                        "bytes_total": total,
+                    },
+                }
+            )
+
+        try:
+            with self.server.download_lock:
+                files = download_model(name, self.server.local_repo, progress=progress)
+        except ValueError as exc:
+            if started_sse:
+                self._write_sse({"event": "error", "data": {"message": str(exc)}})
+                return
+            self._json(400, {"error": "validation_error", "detail": str(exc)})
+            return
+        except WeightFetchError as exc:
+            if started_sse:
+                self._write_sse({"event": "error", "data": {"message": str(exc)}})
+                return
+            self._json(502, {"error": "download_failed", "detail": str(exc)})
+            return
+        payload = {"name": name, "ready": True, "files": files}
+        if want_sse:
+            if not started_sse:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+            self._write_sse({"event": "done", "data": payload})
+            return
+        self._json(200, payload)
 
     def _create_job(self) -> None:
         try:

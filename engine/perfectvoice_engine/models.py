@@ -1,6 +1,7 @@
 """Local Demucs weight inventory.
 
-Fetch lives in a later PR / dev CLI. This module only reads a URL-free
+Fetch lives in ``weight_fetch`` / ``scripts/download_demucs.py`` and is
+never invoked from this module. This module only reads a URL-free
 manifest and hashes files already on disk so infer cannot open a socket.
 
 Demucs 4.1.0 ``Separator(repo=)`` uses ``LocalRepo`` (``*.th``) plus
