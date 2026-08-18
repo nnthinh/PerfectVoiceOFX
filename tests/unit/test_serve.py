@@ -28,6 +28,7 @@ from perfectvoice_engine.serve import (  # noqa: E402
     BindError,
     PathNotAllowed,
     TokenError,
+    check_allowed_root,
     check_path_under_roots,
     load_token_file,
     parse_token,
@@ -269,6 +270,12 @@ class BindAndTokenUnitTests(unittest.TestCase):
             load_token_file(path)
         self.assertFalse(path.exists())
 
+        path.write_bytes(b"\xff\xfe not-ascii")
+        os.chmod(path, 0o600)
+        with self.assertRaises(TokenError):
+            load_token_file(path)
+        self.assertFalse(path.exists())
+
     def test_path_outside_and_dotdot_rejected(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="pv-root-"))
         media = tmp / "media"
@@ -279,6 +286,25 @@ class BindAndTokenUnitTests(unittest.TestCase):
             check_path_under_roots(str(tmp / "other" / "x.mov"), roots)
         with self.assertRaises(PathNotAllowed):
             check_path_under_roots(str(media / ".." / "other" / "x.mov"), roots)
+
+    def test_filesystem_root_is_not_an_allowed_root(self) -> None:
+        with self.assertRaises(PathNotAllowed) as ctx:
+            check_allowed_root(os.sep)
+        self.assertIn("filesystem root", str(ctx.exception))
+
+    def test_symlink_escape_rejected(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="pv-link-"))
+        media = tmp / "media"
+        media.mkdir()
+        outside = tmp / "secret.mov"
+        outside.write_bytes(b"x")
+        link = media / "link.mov"
+        try:
+            link.symlink_to(outside)
+        except OSError as exc:
+            self.skipTest(f"symlink not permitted: {exc}")
+        with self.assertRaises(PathNotAllowed):
+            check_path_under_roots(str(link), [str(media)])
 
 
 class SchemaGateUnitTests(unittest.TestCase):
@@ -306,6 +332,27 @@ class SchemaGateUnitTests(unittest.TestCase):
             validate_job_request(body)
         self.assertIn("source_channels", str(ctx.exception))
 
+    def test_allowed_roots_must_match_params(self) -> None:
+        body = _job_payload(str(self.src), str(self.out), self.roots)
+        body["params"]["allowed_roots"] = [str(self.media)]
+        with self.assertRaises(Exception) as ctx:
+            validate_job_request(body)
+        self.assertIn("allowed_roots", str(ctx.exception))
+
+    def test_filesystem_root_job_rejected(self) -> None:
+        body = _job_payload("/etc/passwd", os.sep, [os.sep])
+        with self.assertRaises(PathNotAllowed):
+            validate_job_request(body)
+
+    def test_persists_canonical_paths(self) -> None:
+        body = _job_payload(str(self.src), str(self.out), self.roots)
+        got = validate_job_request(body)
+        self.assertEqual(got["output_dir"], str(self.out.resolve()))
+        self.assertEqual(got["params"]["output_dir"], str(self.out.resolve()))
+        self.assertEqual(got["clips"][0]["source_path"], str(self.src.resolve()))
+        self.assertEqual(got["allowed_roots"], [str(p.resolve()) for p in (self.media, self.out)])
+        self.assertEqual(got["params"]["allowed_roots"], got["allowed_roots"])
+
 
 class CliBindTests(unittest.TestCase):
     def test_reject_wan_bind_cli(self) -> None:
@@ -320,7 +367,8 @@ class CliBindTests(unittest.TestCase):
         proc = _run_cli("127.0.0.1", extra=["--token-fd", "3"])
         self.assertNotEqual(proc.returncode, 0)
         self.assertNotIn("READY", proc.stdout)
-        self.assertIn("token-fd", proc.stderr)
+        self.assertIn("--token-fd is not supported", proc.stderr)
+        self.assertIn("token-file or stdin", proc.stderr)
 
 
 class SidecarHttpTests(unittest.TestCase):
@@ -382,6 +430,12 @@ class SidecarHttpTests(unittest.TestCase):
         status, body, _ = eng.request("POST", "/v1/models/download", body={"name": "htdemucs"})
         self.assertEqual(status, 404)
 
+    def test_serve_does_not_import_ml(self) -> None:
+        self.assertNotIn("demucs", sys.modules)
+        self.assertNotIn("torch", sys.modules)
+        src = (ENGINE_DIR / "perfectvoice_engine" / "serve.py").read_text(encoding="utf-8")
+        self.assertNotRegex(src, r"(?m)^\s*(import|from)\s+(demucs|torch)\b")
+
     def test_job_path_outside_allowed_roots(self) -> None:
         eng = self.start()
         body = self.payload()
@@ -390,6 +444,65 @@ class SidecarHttpTests(unittest.TestCase):
         self.assertEqual(status, 400)
         assert isinstance(resp, dict)
         self.assertEqual(resp.get("error"), "path_not_allowed")
+
+    def test_job_dotdot_escape_http(self) -> None:
+        eng = self.start()
+        body = self.payload()
+        body["clips"][0]["source_path"] = str(self.media / ".." / "outside.mov")
+        status, resp, _ = eng.request("POST", "/v1/jobs", body)
+        self.assertEqual(status, 400)
+        assert isinstance(resp, dict)
+        self.assertEqual(resp.get("error"), "path_not_allowed")
+
+    def test_job_output_dir_outside_roots(self) -> None:
+        eng = self.start()
+        other = self.tmp / "other"
+        other.mkdir()
+        body = self.payload()
+        body["output_dir"] = str(other)
+        body["params"]["output_dir"] = str(other)
+        status, resp, _ = eng.request("POST", "/v1/jobs", body)
+        self.assertEqual(status, 400)
+        assert isinstance(resp, dict)
+        self.assertEqual(resp.get("error"), "path_not_allowed")
+
+    def test_job_symlink_escape_http(self) -> None:
+        outside = self.tmp / "secret.mov"
+        outside.write_bytes(b"x")
+        link = self.media / "link.mov"
+        try:
+            link.symlink_to(outside)
+        except OSError as exc:
+            self.skipTest(f"symlink not permitted: {exc}")
+        eng = self.start()
+        body = self.payload()
+        body["clips"][0]["source_path"] = str(link)
+        status, resp, _ = eng.request("POST", "/v1/jobs", body)
+        self.assertEqual(status, 400)
+        assert isinstance(resp, dict)
+        self.assertEqual(resp.get("error"), "path_not_allowed")
+
+    def test_job_filesystem_root_allowed_roots(self) -> None:
+        eng = self.start()
+        body = self.payload()
+        body["allowed_roots"] = [os.sep]
+        body["params"]["allowed_roots"] = [os.sep]
+        body["clips"][0]["source_path"] = "/etc/passwd"
+        body["output_dir"] = os.sep
+        body["params"]["output_dir"] = os.sep
+        status, resp, _ = eng.request("POST", "/v1/jobs", body)
+        self.assertEqual(status, 400)
+        assert isinstance(resp, dict)
+        self.assertEqual(resp.get("error"), "path_not_allowed")
+
+    def test_job_allowed_roots_mismatch(self) -> None:
+        eng = self.start()
+        body = self.payload()
+        body["params"]["allowed_roots"] = [str(self.media)]
+        status, resp, _ = eng.request("POST", "/v1/jobs", body)
+        self.assertEqual(status, 400)
+        assert isinstance(resp, dict)
+        self.assertEqual(resp.get("error"), "validation_error")
 
     def test_job_wet_dry_sample_rate_http(self) -> None:
         eng = self.start()
@@ -480,6 +593,21 @@ class SidecarHttpTests(unittest.TestCase):
         self.assertEqual(status, 401)
         assert isinstance(body, dict)
         self.assertEqual(body.get("error"), "unauthorized")
+
+    def test_bearer_required_before_method_dispatch(self) -> None:
+        eng = self.start()
+        status, body, _ = eng.request("POST", "/v1/jobs", self.payload(), token=None)
+        self.assertEqual(status, 401)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("error"), "unauthorized")
+        status, body, _ = eng.request("PUT", "/v1/health", token=None)
+        self.assertEqual(status, 401)
+        status, body, _ = eng.request("DELETE", "/v1/health", token=None)
+        self.assertEqual(status, 401)
+        status, body, _ = eng.request("PUT", "/v1/health")
+        self.assertEqual(status, 405)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("error"), "method_not_allowed")
 
 
 if __name__ == "__main__":

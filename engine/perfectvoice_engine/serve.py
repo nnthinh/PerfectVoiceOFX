@@ -111,11 +111,12 @@ def load_token_file(path: Path) -> str:
         raw = path.read_text(encoding="ascii")
     except (OSError, UnicodeError) as exc:
         raise TokenError("token file not readable") from exc
-    # One-shot: unlink even if the contents or mode are bad.
-    try:
-        path.unlink()
-    except OSError as exc:
-        raise TokenError("failed to unlink token file") from exc
+    finally:
+        # One-shot: unlink even if the contents or mode are bad.
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise TokenError("failed to unlink token file") from exc
     if too_open:
         raise TokenError("token file mode must be 0600")
     return parse_token(raw)
@@ -134,6 +135,11 @@ def canonicalize(path: str) -> Path:
     return Path(path).expanduser().resolve()
 
 
+def is_filesystem_root(path: Path) -> bool:
+    # Panel roots are user-picked media/output dirs, never "/" or "C:\\".
+    return path == Path(path.anchor)
+
+
 def is_under_root(path: Path, root: Path) -> bool:
     try:
         if os.name == "nt":
@@ -145,16 +151,29 @@ def is_under_root(path: Path, root: Path) -> bool:
         return False
 
 
-def check_path_under_roots(path: str, roots: list[str]) -> None:
+def _reject_raw_path(path: str) -> None:
     if not path or "\x00" in path:
         raise PathNotAllowed(path, "empty or NUL path")
     # Reject `..` on the raw string so we never rely on resolve() alone.
     if contains_dotdot(path):
         raise PathNotAllowed(path, "path contains '..'")
+
+
+def check_allowed_root(root: str) -> Path:
+    _reject_raw_path(root)
+    resolved = canonicalize(root)
+    if is_filesystem_root(resolved):
+        raise PathNotAllowed(root, "filesystem root is not an allowed_root")
+    return resolved
+
+
+def check_path_under_roots(path: str, roots: list[str]) -> Path:
+    _reject_raw_path(path)
     resolved = canonicalize(path)
     canon_roots = [canonicalize(root) for root in roots]
     if not any(is_under_root(resolved, root) for root in canon_roots):
         raise PathNotAllowed(path, "path is outside allowed_roots")
+    return resolved
 
 
 def find_schema_dir() -> Path:
@@ -204,18 +223,41 @@ def validation_detail(exc: ValidationError) -> str:
     return f"{path}: {exc.message}"
 
 
+def _canon_list(paths: list[str]) -> list[Path]:
+    return [canonicalize(p) for p in paths]
+
+
 def validate_job_request(body: object) -> dict[str, Any]:
     try:
         schemas().create_job.validate(body)
     except ValidationError as exc:
         raise ValidationError(validation_detail(exc)) from exc
     assert isinstance(body, dict)
-    roots = list(body["allowed_roots"])
-    check_path_under_roots(str(body["output_dir"]), roots)
-    check_path_under_roots(str(body["params"]["output_dir"]), roots)
+    top_roots = [str(r) for r in body["allowed_roots"]]
+    param_roots = [str(r) for r in body["params"]["allowed_roots"]]
+    if _canon_list(top_roots) != _canon_list(param_roots):
+        raise ValidationError("allowed_roots does not match params.allowed_roots")
+    if canonicalize(str(body["output_dir"])) != canonicalize(str(body["params"]["output_dir"])):
+        raise ValidationError("output_dir does not match params.output_dir")
+    # Persist resolved paths so a later I/O PR does not reopen the raw client strings.
+    canon_roots = [str(check_allowed_root(r)) for r in top_roots]
+    output_dir = str(check_path_under_roots(str(body["output_dir"]), canon_roots))
+    clips: list[dict[str, Any]] = []
     for clip in body["clips"]:
-        check_path_under_roots(str(clip["source_path"]), roots)
-    return body
+        rewritten = dict(clip)
+        rewritten["source_path"] = str(
+            check_path_under_roots(str(clip["source_path"]), canon_roots)
+        )
+        clips.append(rewritten)
+    params = dict(body["params"])
+    params["allowed_roots"] = canon_roots
+    params["output_dir"] = output_dir
+    return {
+        "clips": clips,
+        "params": params,
+        "allowed_roots": canon_roots,
+        "output_dir": output_dir,
+    }
 
 
 def utc_now() -> str:
@@ -401,10 +443,34 @@ class EngineHandler(BaseHTTPRequestHandler):
         # Path/status only — never headers (Authorization).
         sys.stderr.write("%s\n" % (fmt % args))
 
+    def handle_one_request(self) -> None:
+        try:
+            self.raw_requestline = self.rfile.readline(65537)
+            if len(self.raw_requestline) > 65536:
+                self.requestline = ""
+                self.request_version = ""
+                self.command = ""
+                self.send_error(414)
+                return
+            if not self.raw_requestline:
+                self.close_connection = True
+                return
+            if not self.parse_request():
+                return
+            self.server.last_request = time.monotonic()
+            if not self._authorized():
+                return
+            handler = getattr(self, "do_" + self.command, None)
+            if handler is None:
+                self._json(405, {"error": "method_not_allowed"})
+                return
+            handler()
+            self.wfile.flush()
+        except TimeoutError as exc:
+            self.log_error("Request timed out: %r", exc)
+            self.close_connection = True
+
     def do_GET(self) -> None:
-        self.server.last_request = time.monotonic()
-        if not self._authorized():
-            return
         path = urlparse(self.path).path
         if path == "/v1/health":
             self._json(
@@ -437,9 +503,6 @@ class EngineHandler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not_found"})
 
     def do_POST(self) -> None:
-        self.server.last_request = time.monotonic()
-        if not self._authorized():
-            return
         path = urlparse(self.path).path
         if path == "/v1/jobs":
             self._create_job()
