@@ -1,0 +1,20 @@
+{
+  "schema": "perfectvoice.params.v1",
+  "model": "htdemucs",
+  "device": "auto",
+  "segment": 7.8,
+  "overlap": 0.25,
+  "shifts": 1,
+  "vocals_only_bag": false,
+  "wet": 0.85,
+  "output_gain_db": 0.0,
+  "mono": false,
+  "sample_format": "pcm24",
+  "enhancer": "none",
+  "resampler_id": "soxr_hq_v1",
+  "clip_policy": "no_demucs_rescale",
+  "output_dir": "/path/PerfectVoice/proj/",
+  "allowed_roots": ["/Volumes/Media", "/path/PerfectVoice"],
+  "use_cache": true,
+  "wet_dry_sample_rate": 44100
+}

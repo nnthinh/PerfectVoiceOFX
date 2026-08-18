@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfectvoice.local/schema/hash-fields.v1.json",
+  "title": "PerfectVoice cache hash identity fields v1",
+  "description": "Every field that changes output bytes must appear in the cache key. wet_dry_sample_rate is NOT a client-supplied hash input — the engine derives it from enhancer_id (none→44100, deepfilternet3→48000) before hashing. handles_*_actual is a pure function of (t0, t1, handles_requested, file_duration_seconds) and is not hashed as its own field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "file_id",
+    "src_in",
+    "src_out",
+    "audio_stream_index",
+    "channel_map",
+    "model_name",
+    "weights_sha256",
+    "vocals_only_bag",
+    "wet",
+    "gain",
+    "mono",
+    "handles_requested",
+    "file_duration_seconds",
+    "segment",
+    "overlap",
+    "shifts",
+    "enhancer_id",
+    "project_sample_rate",
+    "sample_format",
+    "resampler_id",
+    "clip_policy",
+    "engine_semver"
+  ],
+  "properties": {
+    "file_id": {
+      "description": "POSIX (dev, ino, size, mtime) or Windows (volume serial, file index, size, mtime). Encoding is engine-defined."
+    },
+    "src_in": {
+      "description": "source_in_sample (inclusive)."
+    },
+    "src_out": {
+      "description": "source_out_sample (exclusive)."
+    },
+    "audio_stream_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "channel_map": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "model_name": {
+      "type": "string",
+      "enum": ["htdemucs", "htdemucs_ft"]
+    },
+    "weights_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "vocals_only_bag": {
+      "type": "boolean"
+    },
+    "wet": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "gain": {
+      "description": "output_gain_db"
+    },
+    "mono": {
+      "type": "boolean"
+    },
+    "handles_requested": {
+      "description": "User-requested H (handles_seconds). Actual clamped handles are not hashed separately."
+    },
+    "file_duration_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "segment": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "overlap": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "shifts": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "enhancer_id": {
+      "type": "string",
+      "enum": ["none", "deepfilternet3"],
+      "description": "Implies wet_dry_sample_rate. Do not hash a client-supplied wet_dry_sample_rate."
+    },
+    "project_sample_rate": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sample_format": {
+      "type": "string",
+      "enum": ["pcm24", "float32"]
+    },
+    "resampler_id": {
+      "type": "string",
+      "enum": ["soxr_hq_v1"]
+    },
+    "clip_policy": {
+      "type": "string",
+      "enum": ["no_demucs_rescale"]
+    },
+    "engine_semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

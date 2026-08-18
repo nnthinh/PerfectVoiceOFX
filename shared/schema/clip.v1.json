@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfectvoice.local/schema/clip.v1.json",
+  "title": "PerfectVoice clip manifest v1",
+  "description": "Panel → engine clip contract. handles_*_actual and wet_dry_sample_rate belong on the job RESULT only — not on this client payload. source_channels > 2 (5.1 / 7.1 / adaptive) is rejected; no silent downmix.",
+  "$defs": {
+    "rational_fps": {
+      "title": "Rational frame rate",
+      "description": "Exact num/den. 23.976 is 24000/1001, never 24.0.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["num", "den"],
+      "properties": {
+        "num": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "den": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "clip_id",
+    "display_name",
+    "source_path",
+    "source_in_sample",
+    "source_out_sample",
+    "source_sample_rate",
+    "source_channels",
+    "audio_stream_index",
+    "channel_map",
+    "timeline_start_frame",
+    "timeline_end_frame",
+    "timeline_fps",
+    "source_fps",
+    "output_media_fps",
+    "project_sample_rate",
+    "handles_seconds",
+    "file_duration_seconds"
+  ],
+  "properties": {
+    "schema": {
+      "const": "perfectvoice.clip.v1"
+    },
+    "clip_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_in_sample": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Inclusive extract start at source_sample_rate (half-up from t0 − H_left_actual)."
+    },
+    "source_out_sample": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Exclusive extract end at source_sample_rate (half-up from t1 + H_right_actual)."
+    },
+    "source_sample_rate": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "source_channels": {
+      "type": "integer",
+      "enum": [1, 2],
+      "description": "Mono or stereo only. 5.1 / >2 is rejected at this schema."
+    },
+    "audio_stream_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "channel_map": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "timeline_start_frame": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "timeline_end_frame": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "timeline_fps": {
+      "$ref": "#/$defs/rational_fps"
+    },
+    "source_fps": {
+      "$ref": "#/$defs/rational_fps"
+    },
+    "output_media_fps": {
+      "$ref": "#/$defs/rational_fps"
+    },
+    "project_sample_rate": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "handles_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Requested handle H (seconds). Engine clamps and returns handles_*_actual on the job result."
+    },
+    "file_duration_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  }
+}

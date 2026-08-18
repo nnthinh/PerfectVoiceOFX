@@ -1,0 +1,2 @@
+# Dev / CI extras (not the engine runtime).
+jsonschema>=4.18

@@ -48,12 +48,22 @@ docs/licenses/                 # Demucs MIT + weights disclaimer
 host/com.perfectvoice.panel/   # Workflow Integration (trống)
 engine/perfectvoice_engine/    # package marker
 engine/models/                 # không commit weights
-shared/schema/
+shared/schema/                 # clip / params / job / hash-fields JSON Schema v1
+shared/openapi.yaml            # localhost HTTP sketch (no /v1/models/download yet)
 installer/macos/
 installer/windows/
 scripts/                       # CI URL gate; fetch scripts sau
-tests/unit/
+tests/unit/                    # python3 -m unittest tests/unit/test_schemas.py
 tests/golden/
+```
+
+## Schema contracts
+
+`shared/schema/` is the clip / params / job v1 contract. Client params **must not** send `wet_dry_sample_rate` (engine-derived). `handles_*_actual` lives on the job result only.
+
+```
+python3 -m pip install -r requirements-dev.txt
+python3 -m unittest tests/unit/test_schemas.py
 ```
 
 ## License

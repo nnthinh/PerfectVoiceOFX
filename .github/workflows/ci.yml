@@ -14,3 +14,7 @@ jobs:
         run: bash scripts/ci_forbid_demucs_urls.sh
       - name: Compile engine package
         run: python3 -m compileall -q engine/perfectvoice_engine
+      - name: Schema contract tests
+        run: |
+          python3 -m pip install --user 'jsonschema>=4.18'
+          python3 -m unittest tests/unit/test_schemas.py

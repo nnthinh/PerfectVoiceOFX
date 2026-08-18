@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://perfectvoice.local/schema/params.v1.json",
+  "title": "PerfectVoice job params v1",
+  "description": "Client job params. additionalProperties is false: wet_dry_sample_rate MUST NOT be sent (engine derives 44100 if enhancer=none, 48000 if deepfilternet3). handles_*_actual is job RESULT only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "model",
+    "device",
+    "segment",
+    "overlap",
+    "shifts",
+    "vocals_only_bag",
+    "wet",
+    "output_gain_db",
+    "mono",
+    "sample_format",
+    "enhancer",
+    "resampler_id",
+    "clip_policy",
+    "output_dir",
+    "allowed_roots",
+    "use_cache"
+  ],
+  "properties": {
+    "schema": {
+      "const": "perfectvoice.params.v1"
+    },
+    "model": {
+      "type": "string",
+      "enum": ["htdemucs", "htdemucs_ft"]
+    },
+    "device": {
+      "type": "string",
+      "enum": ["auto", "mps", "cuda", "cpu"]
+    },
+    "segment": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 7.8,
+      "description": "HTDemucs Transformer ceiling is 7.8 s."
+    },
+    "overlap": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "shifts": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "vocals_only_bag": {
+      "type": "boolean"
+    },
+    "wet": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "output_gain_db": {
+      "type": "number",
+      "minimum": -12,
+      "maximum": 12
+    },
+    "mono": {
+      "type": "boolean"
+    },
+    "sample_format": {
+      "type": "string",
+      "enum": ["pcm24", "float32"]
+    },
+    "enhancer": {
+      "type": "string",
+      "enum": ["none", "deepfilternet3"],
+      "description": "Engine derives wet_dry_sample_rate from this field. Client never sends the rate."
+    },
+    "resampler_id": {
+      "type": "string",
+      "enum": ["soxr_hq_v1"]
+    },
+    "clip_policy": {
+      "type": "string",
+      "enum": ["no_demucs_rescale"]
+    },
+    "output_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "allowed_roots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Canonical roots the engine may read/write. Stolen token ≠ whole filesystem."
+    },
+    "use_cache": {
+      "type": "boolean"
+    }
+  }
+}

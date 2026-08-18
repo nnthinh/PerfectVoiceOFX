@@ -1,0 +1,285 @@
+openapi: 3.1.0
+info:
+  title: PerfectVoice engine sidecar
+  version: 0.1.0
+  description: |
+    Localhost HTTP sketch (no implementation in this PR).
+
+    Bind **127.0.0.1 only**. Auth is `Authorization: Bearer <token>` from a
+    0600 one-shot token file (or stdin). `protocol_version` is an integer:
+    panel and engine must match major; engine minor ≥ panel.
+
+    `POST /v1/models/download` is **not** in this revision (PR 15).
+servers:
+  - url: http://127.0.0.1
+    description: Engine sidecar (port chosen at spawn; printed on READY line)
+security:
+  - bearerAuth: []
+tags:
+  - name: meta
+  - name: jobs
+paths:
+  /v1/health:
+    get:
+      tags: [meta]
+      summary: Liveness
+      operationId: getHealth
+      responses:
+        "200":
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/capabilities:
+    get:
+      tags: [meta]
+      summary: Devices, local models, protocol
+      operationId: getCapabilities
+      responses:
+        "200":
+          description: What this engine can run right now
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/jobs:
+    post:
+      tags: [jobs]
+      summary: Enqueue a job
+      operationId: createJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequest"
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/jobs/{id}:
+    get:
+      tags: [jobs]
+      summary: Job snapshot (same shape as job.json when terminal)
+      operationId: getJob
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Current job record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/jobs/{id}/cancel:
+    post:
+      tags: [jobs]
+      summary: Request cancel
+      operationId: cancelJob
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "202":
+          description: Cancel requested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Job already terminal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/jobs/{id}/events:
+    get:
+      tags: [jobs]
+      summary: SSE progress
+      operationId: streamJobEvents
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: |
+            `text/event-stream`. Fetch from Electron main/preload only.
+
+            Example events:
+            `event: progress` data `{clip_id, segment_offset, audio_length}`
+            `event: done` data `{id}`
+            `event: error` data `{id, message}`
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: hex
+      description: 256-bit token from the one-shot token file / stdin.
+
+  parameters:
+    JobId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Schema / path / allowed_roots rejection
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Unknown job id
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, protocol_version]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        protocol_version:
+          type: integer
+          minimum: 1
+
+    Capabilities:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, devices, models_ready]
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        devices:
+          type: array
+          items:
+            type: string
+            enum: [mps, cuda, cpu]
+        models_ready:
+          type: object
+          additionalProperties:
+            type: boolean
+          description: Local files present (name → ready). No remote probe.
+
+    CreateJobRequest:
+      type: object
+      additionalProperties: false
+      required: [clips, params, allowed_roots, output_dir]
+      properties:
+        clips:
+          type: array
+          minItems: 1
+          items:
+            $ref: "./schema/clip.v1.json"
+        params:
+          $ref: "./schema/params.v1.json"
+        allowed_roots:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            minLength: 1
+          description: Sandbox roots (media + output). Engine canonicalizes.
+        output_dir:
+          type: string
+          minLength: 1
+
+    JobAccepted:
+      type: object
+      additionalProperties: false
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued]
+
+    CancelAccepted:
+      type: object
+      additionalProperties: false
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [cancelling, cancelled]
+
+    JobRecord:
+      description: |
+        HTTP snapshot. Terminal success matches `perfectvoice.job.v1`
+        plus `status`. `handles_*_actual` and `wet_dry_sample_rate` live
+        on each clip result, never on client params.
+      allOf:
+        - $ref: "./schema/job.v1.json"
+        - type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [queued, running, done, error, cancelled, cancelling]
+            error:
+              type: string
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+          minLength: 1
+        detail:
+          type: string
