@@ -1,2 +1,4 @@
 # Dev / CI extras (not the engine runtime).
 jsonschema>=4.18
+numpy>=1.24
+soxr>=0.5

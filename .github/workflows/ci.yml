@@ -22,3 +22,7 @@ jobs:
         run: |
           python3 -m pip install --user 'jsonschema>=4.18'
           python3 -m unittest tests.unit.test_serve
+      - name: Engine extract/resample tests
+        run: |
+          python3 -m pip install --user 'jsonschema>=4.18' 'numpy>=1.24' 'soxr>=0.5'
+          python3 -m unittest tests.unit.test_resample_sync

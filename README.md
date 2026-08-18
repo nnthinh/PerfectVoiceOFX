@@ -63,7 +63,7 @@ tests/golden/
 
 ```
 python3 -m pip install -r requirements-dev.txt
-python3 -m unittest tests.unit.test_schemas tests.unit.test_serve
+python3 -m unittest tests.unit.test_schemas tests.unit.test_serve tests.unit.test_resample_sync
 ```
 
 ## License
