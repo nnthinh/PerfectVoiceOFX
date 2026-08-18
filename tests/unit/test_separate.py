@@ -37,6 +37,7 @@ from perfectvoice_engine.models import (  # noqa: E402
     load_manifest,
     manifest_path,
     models_ready,
+    parse_bag_models,
     require_model,
     sha256_file,
     weights_sha256,
@@ -104,6 +105,27 @@ def _write_htdemucs_fixture(root: Path, *, th_payload: bytes = b"fixture-htdemuc
             "955717e8-8726e21a.th": th_payload,
         },
     )
+
+
+def _write_vocals_only_fixture(
+    root: Path,
+    *,
+    th_payload: bytes = b"vocals-specialist",
+    yaml_bytes: bytes | None = None,
+    yaml_name: str = "htdemucs_ft.yaml",
+    th_name: str = "04573f0d-fixture.th",
+) -> dict[str, dict[str, str]]:
+    # Non-official .th suffix so the load path cannot be hardcoding f3cf25b2.
+    if yaml_bytes is None:
+        yaml_bytes = b"models: ['f7e0c4bc', 'd12395a8', '92cfc3b6', '04573f0d']\n"
+    (root / yaml_name).write_bytes(yaml_bytes)
+    (root / th_name).write_bytes(th_payload)
+    return {
+        QUALITY_MODEL: {
+            yaml_name: _digest(yaml_bytes),
+            th_name: _digest(th_payload),
+        }
+    }
 
 
 class FakeSeparator:
@@ -203,7 +225,21 @@ class ManifestTests(unittest.TestCase):
 
     def test_vocals_only_signature_resolves_local_file(self) -> None:
         files = files_for(VOCALS_ONLY_SIG)
-        self.assertEqual(set(files), {"04573f0d-f3cf25b2.th"})
+        self.assertEqual(len(files), 1)
+        filename = next(iter(files))
+        self.assertTrue(filename.endswith(".th"))
+        self.assertEqual(filename.split("-", 1)[0], VOCALS_ONLY_SIG)
+        # Inventory may name the official file; the load path must not.
+
+    def test_parse_bag_models_inline_and_block(self) -> None:
+        inline = parse_bag_models(
+            "models: ['f7e0c4bc', 'd12395a8', '92cfc3b6', '04573f0d']\n"
+            "weights: [[1., 0., 0., 0.]]\n"
+        )
+        self.assertEqual(inline, ["f7e0c4bc", "d12395a8", "92cfc3b6", "04573f0d"])
+        block = parse_bag_models("models:\n  - f7e0c4bc\n  - '04573f0d'\nweights: [1]\n")
+        self.assertEqual(block, ["f7e0c4bc", "04573f0d"])
+        self.assertEqual(parse_bag_models("weights: [1]\n"), [])
 
 
 class RequireModelTests(unittest.TestCase):
@@ -352,15 +388,17 @@ class OfflineFixtureTests(unittest.TestCase):
         self.assertGreater(result.peak, 1.0)
         self.assertAlmostEqual(result.peak, 2.0, places=5)
 
-    def test_vocals_only_bag_uses_local_signature(self) -> None:
+    def test_vocals_only_bag_default_off(self) -> None:
+        req = _req()
+        self.assertFalse(req.vocals_only_bag)
+        self.assertEqual(separator_model_name(req), DEFAULT_MODEL)
+        self.assertEqual(separator_model_name(_req(vocals_only_bag=True)), VOCALS_ONLY_SIG)
+
+    def test_vocals_only_bag_reads_local_yaml_then_signature(self) -> None:
         FakeSeparator.instances.clear()
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            payload = b"vocals-specialist"
-            (repo / "04573f0d-f3cf25b2.th").write_bytes(payload)
-            manifest = {
-                QUALITY_MODEL: {"04573f0d-f3cf25b2.th": _digest(payload)},
-            }
+            manifest = _write_vocals_only_fixture(repo)
             with (
                 patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
                 patch("perfectvoice_engine.separate._separator_cls", return_value=FakeSeparator),
@@ -372,9 +410,57 @@ class OfflineFixtureTests(unittest.TestCase):
             ):
                 req = _req(vocals_only_bag=True)
                 self.assertEqual(separator_model_name(req), VOCALS_ONLY_SIG)
-                separate_vocals(req, repo)
-        self.assertEqual(FakeSeparator.instances[0].model, VOCALS_ONLY_SIG)
-        self.assertEqual(FakeSeparator.instances[0].repo, repo)
+                result = separate_vocals(req, repo)
+        sep = FakeSeparator.instances[0]
+        self.assertEqual(sep.model, VOCALS_ONLY_SIG)
+        self.assertFalse(str(sep.model).endswith(".th"))
+        self.assertEqual(sep.repo, repo)
+        self.assertEqual(result.model_sha256, weights_sha256(files_for(VOCALS_ONLY_SIG, manifest)))
+
+    def test_vocals_only_bag_missing_yaml_no_separator_no_hub(self) -> None:
+        FakeSeparator.instances.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            payload = b"vocals-specialist"
+            (repo / "04573f0d-fixture.th").write_bytes(payload)
+            manifest = {
+                QUALITY_MODEL: {
+                    "htdemucs_ft.yaml": _digest(b"models: ['04573f0d']\n"),
+                    "04573f0d-fixture.th": _digest(payload),
+                }
+            }
+            with _block_and_record_network() as hits:
+                with (
+                    patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
+                    patch(
+                        "perfectvoice_engine.separate._separator_cls",
+                        side_effect=AssertionError("Separator must not run"),
+                    ),
+                ):
+                    with self.assertRaises(ModelNotInstalled) as ctx:
+                        separate_vocals(_req(vocals_only_bag=True), repo)
+            self.assertIn("Model not installed", str(ctx.exception))
+            self.assertEqual(FakeSeparator.instances, [])
+            _assert_no_forbidden_hosts(hits)
+            self.assertEqual(hits, [])
+
+    def test_vocals_only_bag_yaml_without_sig_no_separator(self) -> None:
+        FakeSeparator.instances.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            yaml_bytes = b"models: ['f7e0c4bc', 'd12395a8', '92cfc3b6']\n"
+            manifest = _write_vocals_only_fixture(repo, yaml_bytes=yaml_bytes)
+            with (
+                patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
+                patch(
+                    "perfectvoice_engine.separate._separator_cls",
+                    side_effect=AssertionError("Separator must not run"),
+                ),
+            ):
+                with self.assertRaises(ModelNotInstalled) as ctx:
+                    separate_vocals(_req(vocals_only_bag=True), repo)
+            self.assertIn("Model not installed", str(ctx.exception))
+            self.assertEqual(FakeSeparator.instances, [])
 
     def test_cancel_callback_raises(self) -> None:
         event = threading.Event()
@@ -412,6 +498,20 @@ class StaticLoadContractTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("huggingface.co/adefossez", text)
             self.assertNotIn("dl.fbaipublicfiles.com", text)
+
+    def test_engine_does_not_hardcode_vocals_th_path(self) -> None:
+        for path in (
+            ENGINE_DIR / "perfectvoice_engine" / "separate.py",
+            ENGINE_DIR / "perfectvoice_engine" / "models.py",
+            ENGINE_DIR / "perfectvoice_engine" / "pipeline.py",
+            ENGINE_DIR / "perfectvoice_engine" / "serve.py",
+        ):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "04573f0d-f3cf25b2",
+                text,
+                f"{path.name} hardcodes the vocals specialist .th",
+            )
 
     def test_no_bare_get_model_or_separator_without_repo(self) -> None:
         seen_ctor = 0
