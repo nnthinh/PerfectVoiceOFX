@@ -12,9 +12,10 @@ import os
 import platform
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import numpy as np
 
@@ -86,10 +87,22 @@ def resolve_device(requested: str) -> str:
     return "cpu"
 
 
-def _offline_hub_env() -> None:
-    # Fail closed if anything in the Demucs stack still probes the Hub.
+@contextmanager
+def _offline_hub_env() -> Iterator[None]:
+    # Fail closed around Separator only. Restore so a later in-process
+    # user-click fetch (PR 15) is not stuck offline for the sidecar life.
+    keys = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+    previous = {key: os.environ.get(key) for key in keys}
     os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    try:
+        yield
+    finally:
+        for key, old in previous.items():
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
 
 
 def _separator_cls() -> Any:
@@ -147,27 +160,26 @@ def separate_vocals(req: SeparateRequest, local_repo: Path) -> SeparateResult:
     files = require_model(name, repo)
     wav = _as_channels_first(req.wav_44100_stereo)
     device = resolve_device(req.device)
-    _offline_hub_env()
 
-    separator = _separator_cls()(
-        model=name,
-        repo=repo,
-        device=device,
-        shifts=int(req.shifts),
-        overlap=float(req.overlap),
-        split=True,
-        segment=float(req.segment),
-        jobs=0,
-        progress=False,
-        callback=_cancel_callback(req.cancel_event),
-    )
-
-    started = time.perf_counter()
-    _mix, stems = separator.separate_tensor(_to_model_input(wav), sr=MODEL_SAMPLE_RATE)
+    with _offline_hub_env():
+        separator = _separator_cls()(
+            model=name,
+            repo=repo,
+            device=device,
+            shifts=int(req.shifts),
+            overlap=float(req.overlap),
+            split=True,
+            segment=float(req.segment),
+            jobs=0,
+            progress=False,
+            callback=_cancel_callback(req.cancel_event),
+        )
+        started = time.perf_counter()
+        _mix, stems = separator.separate_tensor(_to_model_input(wav), sr=MODEL_SAMPLE_RATE)
     vocals = _to_numpy(stems["vocals"])
     vocals = _as_channels_first(vocals)
     # clip_policy=no_demucs_rescale: do not divide by peak or pass clip=rescale.
-    # Report true-peak so a later stage can soft-clip if > 0 dBFS.
+    # Report sample peak so a later stage can soft-clip if > 0 dBFS.
     peak = float(np.max(np.abs(vocals))) if vocals.size else 0.0
     duration = float(wav.shape[-1]) / float(MODEL_SAMPLE_RATE)
     elapsed = time.perf_counter() - started

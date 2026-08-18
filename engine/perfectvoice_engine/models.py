@@ -2,6 +2,12 @@
 
 Fetch lives in a later PR / dev CLI. This module only reads a URL-free
 manifest and hashes files already on disk so infer cannot open a socket.
+
+Demucs 4.1.0 ``Separator(repo=)`` uses ``LocalRepo`` (``*.th``) plus
+``BagOnlyRepo`` (``*.yaml``). It never opens ``*.safetensors``. The
+manifest therefore lists bag YAML and ``{sig}-{checksum}.th`` — every
+path the constructor will actually read — or ``is_model_ready`` is a
+false positive.
 """
 
 from __future__ import annotations
@@ -108,15 +114,30 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def local_repo_signature(filename: str) -> str | None:
+    """Signature ``LocalRepo`` would bind to ``filename`` (``*.th`` only)."""
+    path = Path(filename)
+    if path.suffix != ".th":
+        return None
+    stem = path.stem
+    if "-" in stem:
+        return stem.rsplit("-", 1)[0]
+    return stem
+
+
 def files_for(name: str, manifest: Mapping[str, Mapping[str, str]] | None = None) -> dict[str, str]:
     table = dict(manifest) if manifest is not None else load_manifest()
     if name in table:
         return dict(table[name])
-    # Signature lookup (vocals-only bag) — still a local filename, never a remote.
+    # Signature lookup (vocals-only) — the .th LocalRepo opens, never a remote.
     for files in table.values():
-        for filename, digest in files.items():
-            if Path(filename).stem == name:
-                return {filename: digest}
+        matched = {
+            filename: digest
+            for filename, digest in files.items()
+            if local_repo_signature(filename) == name
+        }
+        if matched:
+            return matched
     raise ValueError(f"unknown model {name!r}")
 
 

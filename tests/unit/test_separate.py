@@ -33,11 +33,13 @@ from perfectvoice_engine.models import (  # noqa: E402
     VOCALS_ONLY_SIG,
     ModelNotInstalled,
     files_for,
+    is_model_ready,
     load_manifest,
     manifest_path,
     models_ready,
     require_model,
     sha256_file,
+    weights_sha256,
 )
 from perfectvoice_engine.separate import (  # noqa: E402
     CLIP_POLICY,
@@ -92,6 +94,17 @@ def _write_repo(root: Path, files: dict[str, bytes]) -> dict[str, dict[str, str]
     return {DEFAULT_MODEL: mapping}
 
 
+def _write_htdemucs_fixture(root: Path, *, th_payload: bytes = b"fixture-htdemucs") -> dict[str, dict[str, str]]:
+    # Layout stock 4.1.0 Separator(repo=) opens: bag YAML + {sig}-{checksum}.th
+    return _write_repo(
+        root,
+        {
+            "htdemucs.yaml": b"models: ['955717e8']\n",
+            "955717e8-8726e21a.th": th_payload,
+        },
+    )
+
+
 class FakeSeparator:
     instances: list["FakeSeparator"] = []
 
@@ -144,6 +157,21 @@ def _block_and_record_network() -> Iterator[list[str]]:
         yield hits
 
 
+def _call_name(func: ast.AST) -> str | None:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _is_separator_ctor(node: ast.Call) -> bool:
+    if _call_name(node.func) == "Separator":
+        return True
+    # _separator_cls()(model=..., repo=...) — func is itself a Call.
+    return isinstance(node.func, ast.Call) and _call_name(node.func.func) == "_separator_cls"
+
+
 def _assert_no_forbidden_hosts(hits: list[str]) -> None:
     joined = "\n".join(hits)
     for needle in FORBIDDEN_HOST_NEEDLES:
@@ -161,17 +189,20 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(QUALITY_MODEL, "htdemucs_ft")
         self.assertIn(DEFAULT_MODEL, data)
         self.assertIn(QUALITY_MODEL, data)
-        self.assertEqual(len(data[DEFAULT_MODEL]), 1)
-        self.assertEqual(len(data[QUALITY_MODEL]), 4)
+        self.assertEqual(len(data[DEFAULT_MODEL]), 2)
+        self.assertEqual(len(data[QUALITY_MODEL]), 5)
+        self.assertIn("htdemucs.yaml", data[DEFAULT_MODEL])
+        self.assertIn("htdemucs_ft.yaml", data[QUALITY_MODEL])
         for files in data.values():
             for filename, digest in files.items():
                 self.assertNotIn("://", filename)
                 self.assertRegex(digest, r"^[0-9a-f]{64}$")
-                self.assertTrue(filename.endswith(".safetensors"))
+                self.assertTrue(filename.endswith(".yaml") or filename.endswith(".th"))
+                self.assertFalse(filename.endswith(".safetensors"))
 
     def test_vocals_only_signature_resolves_local_file(self) -> None:
         files = files_for(VOCALS_ONLY_SIG)
-        self.assertEqual(set(files), {"04573f0d.safetensors"})
+        self.assertEqual(set(files), {"04573f0d-f3cf25b2.th"})
 
 
 class RequireModelTests(unittest.TestCase):
@@ -201,12 +232,22 @@ class RequireModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             payload = b"fixture-htdemucs"
-            manifest = _write_repo(repo, {"955717e8.safetensors": payload})
+            manifest = _write_htdemucs_fixture(repo, th_payload=payload)
             got = require_model(DEFAULT_MODEL, repo, manifest=manifest)
-            self.assertEqual(got["955717e8.safetensors"], _digest(payload))
-            self.assertEqual(sha256_file(repo / "955717e8.safetensors"), _digest(payload))
+            self.assertEqual(got["955717e8-8726e21a.th"], _digest(payload))
+            self.assertEqual(sha256_file(repo / "955717e8-8726e21a.th"), _digest(payload))
             ready = models_ready(repo, manifest=manifest)
             self.assertTrue(ready[DEFAULT_MODEL])
+
+    def test_safetensors_only_is_not_installed(self) -> None:
+        # Separator(repo=) never opens *.safetensors; ready must stay false.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "955717e8.safetensors").write_bytes(b"not-a-local-repo")
+            (repo / "htdemucs.yaml").write_bytes(b"models: ['955717e8']\n")
+            with self.assertRaises(ModelNotInstalled):
+                require_model(DEFAULT_MODEL, repo)
+            self.assertFalse(is_model_ready(DEFAULT_MODEL, repo))
 
 
 class NoNetworkTests(unittest.TestCase):
@@ -247,7 +288,7 @@ class OfflineFixtureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             payload = b"fixture-htdemucs-offline"
-            manifest = _write_repo(repo, {"955717e8.safetensors": payload})
+            manifest = _write_htdemucs_fixture(repo, th_payload=payload)
             env = {
                 "HF_HUB_OFFLINE": "1",
                 "TRANSFORMERS_OFFLINE": "1",
@@ -271,8 +312,9 @@ class OfflineFixtureTests(unittest.TestCase):
                     return_value="cpu",
                 ),
             ):
+                self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
                 result = separate_vocals(_req(peak=0.4), repo)
-            self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
+                self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
             self.assertEqual(len(FakeSeparator.instances), 1)
             sep = FakeSeparator.instances[0]
             self.assertEqual(sep.model, DEFAULT_MODEL)
@@ -281,7 +323,7 @@ class OfflineFixtureTests(unittest.TestCase):
             self.assertEqual(result.vocals.shape[0], 2)
             self.assertAlmostEqual(result.peak, 0.2, places=5)
             self.assertEqual(result.device_used, "cpu")
-            self.assertEqual(result.model_sha256, _digest(payload))
+            self.assertEqual(result.model_sha256, weights_sha256(manifest[DEFAULT_MODEL]))
 
     def test_no_auto_rescale(self) -> None:
         self.assertEqual(CLIP_POLICY, "no_demucs_rescale")
@@ -294,7 +336,7 @@ class OfflineFixtureTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            manifest = _write_repo(repo, {"955717e8.safetensors": b"hot"})
+            manifest = _write_htdemucs_fixture(repo, th_payload=b"hot")
             with (
                 patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
                 patch("perfectvoice_engine.separate._separator_cls", return_value=HotSeparator),
@@ -305,7 +347,7 @@ class OfflineFixtureTests(unittest.TestCase):
                 patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
             ):
                 result = separate_vocals(_req(frames=16, peak=2.0), repo)
-        # Rescale would squash 2.0 → ~1.0. We keep the true peak.
+        # Rescale would squash 2.0 → ~1.0. We keep the sample peak.
         self.assertGreater(result.peak, 1.0)
         self.assertAlmostEqual(result.peak, 2.0, places=5)
 
@@ -314,9 +356,9 @@ class OfflineFixtureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             payload = b"vocals-specialist"
-            (repo / "04573f0d.safetensors").write_bytes(payload)
+            (repo / "04573f0d-f3cf25b2.th").write_bytes(payload)
             manifest = {
-                QUALITY_MODEL: {"04573f0d.safetensors": _digest(payload)},
+                QUALITY_MODEL: {"04573f0d-f3cf25b2.th": _digest(payload)},
             }
             with (
                 patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
@@ -345,7 +387,7 @@ class OfflineFixtureTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            manifest = _write_repo(repo, {"955717e8.safetensors": b"c"})
+            manifest = _write_htdemucs_fixture(repo, th_payload=b"c")
             with (
                 patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
                 patch("perfectvoice_engine.separate._separator_cls", return_value=Watching),
@@ -370,6 +412,7 @@ class StaticLoadContractTests(unittest.TestCase):
             self.assertNotIn("dl.fbaipublicfiles.com", text)
 
     def test_no_bare_get_model_or_separator_without_repo(self) -> None:
+        seen_ctor = 0
         for path in (
             ENGINE_DIR / "perfectvoice_engine" / "separate.py",
             ENGINE_DIR / "perfectvoice_engine" / "models.py",
@@ -378,15 +421,10 @@ class StaticLoadContractTests(unittest.TestCase):
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
-                func = node.func
-                name = None
-                if isinstance(func, ast.Name):
-                    name = func.id
-                elif isinstance(func, ast.Attribute):
-                    name = func.attr
-                if name == "get_model":
+                if _call_name(node.func) == "get_model":
                     self.fail(f"{path.name}:{node.lineno} calls get_model")
-                if name == "Separator":
+                if _is_separator_ctor(node):
+                    seen_ctor += 1
                     keywords = {kw.arg for kw in node.keywords}
                     self.assertIn("repo", keywords, f"{path.name}:{node.lineno} Separator lacks repo=")
                     for kw in node.keywords:
@@ -395,6 +433,37 @@ class StaticLoadContractTests(unittest.TestCase):
                                 isinstance(kw.value, ast.Constant) and kw.value.value is None,
                                 f"{path.name}:{node.lineno} Separator(repo=None)",
                             )
+        self.assertGreaterEqual(seen_ctor, 1)
+
+    def test_hub_offline_env_restored_after_separate(self) -> None:
+        previous = os.environ.pop("HF_HUB_OFFLINE", None)
+        previous_tf = os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        try:
+            FakeSeparator.instances.clear()
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                manifest = _write_htdemucs_fixture(repo)
+                with (
+                    patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
+                    patch("perfectvoice_engine.separate._separator_cls", return_value=FakeSeparator),
+                    patch(
+                        "perfectvoice_engine.separate._to_model_input",
+                        side_effect=lambda arr: np.ascontiguousarray(arr, dtype=np.float32),
+                    ),
+                    patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
+                ):
+                    separate_vocals(_req(), repo)
+            self.assertNotIn("HF_HUB_OFFLINE", os.environ)
+            self.assertNotIn("TRANSFORMERS_OFFLINE", os.environ)
+        finally:
+            if previous is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = previous
+            if previous_tf is None:
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+            else:
+                os.environ["TRANSFORMERS_OFFLINE"] = previous_tf
 
     def test_load_modules_do_not_import_torch_or_demucs(self) -> None:
         banned = {"torch", "torchaudio", "demucs"}
