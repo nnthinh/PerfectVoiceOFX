@@ -24,10 +24,10 @@ jobs:
           python3 -m unittest tests.unit.test_serve
       - name: Install ffmpeg for extract I/O tests
         run: brew install ffmpeg
-      - name: Engine extract/resample tests
+      - name: Engine extract/resample/blend tests
         run: |
           python3 -m pip install --user 'jsonschema>=4.18' 'numpy>=1.24' 'soxr>=0.5'
-          python3 -m unittest tests.unit.test_resample_sync
+          python3 -m unittest tests.unit.test_resample_sync tests.unit.test_blend tests.unit.test_enhance tests.unit.test_cache
       - name: Engine Separator local-repo tests
         run: |
           python3 -m pip install --user 'numpy>=1.24'
