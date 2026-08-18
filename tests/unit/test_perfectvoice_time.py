@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import sys
 import unittest
 from fractions import Fraction
@@ -17,10 +16,12 @@ from shared.perfectvoice_time import (
     FPS_24,
     FPS_25,
     FPS_29_97,
+    FPS_59_94,
     append_clip_info,
     as_fps,
     extract_sample_range,
     expected_output_sample_count,
+    parse_timeline_frame_rate,
     place_frames,
     round_half_up,
 )
@@ -203,6 +204,21 @@ class FpsParseTests(unittest.TestCase):
             as_fps((0, 1))
         with self.assertRaises(ValueError):
             as_fps(-24)
+
+    def test_timeline_frame_rate_readme_strings(self):
+        self.assertEqual(parse_timeline_frame_rate("23.976"), Fraction(*FPS_23_976))
+        self.assertEqual(parse_timeline_frame_rate("24"), Fraction(*FPS_24))
+        self.assertEqual(parse_timeline_frame_rate("25"), Fraction(*FPS_25))
+        self.assertEqual(parse_timeline_frame_rate("29.97"), Fraction(*FPS_29_97))
+        self.assertEqual(parse_timeline_frame_rate("29.97 DF"), Fraction(*FPS_29_97))
+        self.assertEqual(parse_timeline_frame_rate("59.94"), Fraction(*FPS_59_94))
+        self.assertEqual(parse_timeline_frame_rate(24), Fraction(24, 1))
+
+    def test_timeline_frame_rate_rejects_empty(self):
+        with self.assertRaises(ValueError):
+            parse_timeline_frame_rate("")
+        with self.assertRaises(ValueError):
+            parse_timeline_frame_rate(None)
 
 
 if __name__ == "__main__":

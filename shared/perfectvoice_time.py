@@ -19,6 +19,14 @@ FPS_23_976: Tuple[int, int] = (24000, 1001)
 FPS_24: Tuple[int, int] = (24, 1)
 FPS_25: Tuple[int, int] = (25, 1)
 FPS_29_97: Tuple[int, int] = (30000, 1001)
+FPS_59_94: Tuple[int, int] = (60000, 1001)
+
+# README: drop-frame is a suffix on the same numeric rate ("29.97 DF").
+_NTSC_RATE_STRINGS = {
+    "23.976": FPS_23_976,
+    "29.97": FPS_29_97,
+    "59.94": FPS_59_94,
+}
 
 DEFAULT_HANDLE_S = 0.5
 
@@ -51,6 +59,35 @@ def as_fps(fps: FpsLike) -> Fraction:
     if frac <= 0:
         raise ValueError(f"fps must be positive, got {fps}")
     return frac
+
+
+def parse_timeline_frame_rate(raw: object) -> Fraction:
+    """Map ``Project.GetSetting('timelineFrameRate')`` to a rational fps.
+
+    README: DF is a display suffix (``"29.97 DF"``). 23.976 / 29.97 / 59.94
+    are 24000/1001, 30000/1001, 60000/1001 — not 24.0 / 30.0 / 60.0.
+    """
+    if raw is None:
+        raise ValueError("timelineFrameRate is empty")
+    text = str(raw).strip()
+    if not text:
+        raise ValueError("timelineFrameRate is empty")
+    if text.upper().endswith("DF"):
+        text = text[:-2].strip()
+    if text in _NTSC_RATE_STRINGS:
+        return as_fps(_NTSC_RATE_STRINGS[text])
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(f"unrecognized timelineFrameRate: {raw!r}") from exc
+    if value <= 0:
+        raise ValueError(f"timelineFrameRate must be positive, got {raw!r}")
+    for label, rational in _NTSC_RATE_STRINGS.items():
+        if abs(value - float(label)) < 0.001:
+            return as_fps(rational)
+    if abs(value - round(value)) < 1e-6:
+        return as_fps((int(round(value)), 1))
+    return as_fps(value)
 
 
 def actual_handles(

@@ -209,11 +209,12 @@ Test bắt buộc: 24000/1001, 24/1, 25/1, 30000/1001; clamp SOF (`t0 < H`); `sr
 
 | Script | Việc |
 | --- | --- |
-| `scripts/spikes/dump_resolve_selection.py` | Connect nếu Resolve chạy; dump version / settings / clip. Không chạy → JSON README + exit 0 |
-| `scripts/spikes/place_test_wav.py` | Tính clipInfo Appendix A; `--apply` thì `ImportMedia` + `AppendToTimeline` vào bin `PerfectVoice Spike` / track `PV Isolated Voice` |
+| `scripts/spikes/dump_resolve_selection.py` | Connect nếu Resolve chạy; dump version / settings / clip. Dedupe: một row / audio File Path khác nhau; path trùng → `suppressed_duplicate`. Không chạy → JSON README + exit 0 |
+| `scripts/spikes/place_test_wav.py` | Tính clipInfo Appendix A. Khi connected: `out_fps` từ `project.GetSetting("timelineFrameRate")` (trừ khi `--fps-num`); `recordFrame` từ `GetSelectedClips` rồi playhead+linked, `GetStartFrame` chỉ là last resort + warning. WAV mặc định dài `N_out` @ 48 kHz; `--apply` từ chối nếu `endFrame` vượt media. |
 | `scripts/spikes/resolve_connect.py` | Helper IPC |
-| `shared/perfectvoice_time.py` | Appendix A thuần |
+| `shared/perfectvoice_time.py` | Appendix A thuần + `parse_timeline_frame_rate` (`23.976`→24000/1001, `29.97 DF`→30000/1001) |
 | `tests/unit/test_perfectvoice_time.py` | `python3 -m unittest discover -s tests/unit -v` |
+| `tests/unit/test_selection_dedupe.py` | Dual-system hai path = hai job; path trùng bị flag |
 
 Cả hai script spike **exit 0** khi Resolve tắt — CI không đỏ vì host vắng.
 

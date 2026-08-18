@@ -211,8 +211,86 @@ def item_key(item: Any) -> str:
     return repr(item)
 
 
+def _member_file_path(item: Any) -> Any:
+    if not has_method(item, "GetMediaPoolItem"):
+        return None
+    mp = _call(item.GetMediaPoolItem)
+    if not mp or isinstance(mp, dict) or not has_method(mp, "GetClipProperty"):
+        return None
+    return _call(mp.GetClipProperty, "File Path")
+
+
+def _member_row(item: Any) -> dict:
+    track = (
+        _call(item.GetTrackTypeAndIndex)
+        if has_method(item, "GetTrackTypeAndIndex")
+        else None
+    )
+    kind = track[0] if isinstance(track, (list, tuple)) and track else None
+    index = track[1] if isinstance(track, (list, tuple)) and len(track) > 1 else None
+    return {
+        "name": _call(item.GetName),
+        "unique_id": _call(item.GetUniqueId) if has_method(item, "GetUniqueId") else None,
+        "track_type": kind,
+        "track_index": index,
+        "file_path": _member_file_path(item),
+    }
+
+
+def dedupe_linked_group(members: Sequence[dict]) -> List[dict]:
+    """One row per distinct audio File Path (design §3.3 rule 4).
+
+    Same path twice stays in the dump with ``suppressed_duplicate=True``.
+    Distinct audio paths (dual-system + mixdown) are both unsuppressed.
+    Video is used only when the group has no audio sibling.
+    """
+    audio = [m for m in members if m.get("track_type") == "audio"]
+    video = [m for m in members if m.get("track_type") == "video"]
+    other = [m for m in members if m.get("track_type") not in ("audio", "video")]
+    group_size = len(members)
+
+    def row(member: dict, *, preferred_audio: bool, suppressed: bool, duplicate_of: Any) -> dict:
+        path = member.get("file_path")
+        if isinstance(path, dict) and "_error" in path:
+            path = None
+        return {
+            "chosen_name": member.get("name"),
+            "chosen_track": [member.get("track_type"), member.get("track_index")],
+            "file_path": path if path not in ("", None) else None,
+            "preferred_audio_sibling": preferred_audio,
+            "group_size": group_size,
+            "suppressed_duplicate": suppressed,
+            "duplicate_of": duplicate_of,
+        }
+
+    if audio:
+        seen_paths: dict[str, Any] = {}
+        rows: List[dict] = []
+        for member in audio:
+            path = member.get("file_path")
+            if isinstance(path, dict) and "_error" in path:
+                path = None
+            path_key = path.strip() if isinstance(path, str) else ""
+            first_id = seen_paths.get(path_key) if path_key else None
+            suppressed = bool(path_key and first_id is not None)
+            rows.append(
+                row(
+                    member,
+                    preferred_audio=True,
+                    suppressed=suppressed,
+                    duplicate_of=first_id if suppressed else None,
+                )
+            )
+            if path_key and not suppressed:
+                seen_paths[path_key] = member.get("unique_id") or member.get("name")
+        return rows
+
+    chosen = (video or other or list(members) or [{}])[0]
+    return [row(chosen, preferred_audio=False, suppressed=False, duplicate_of=None)]
+
+
 def group_and_dedupe(items: Sequence[Any]) -> List[dict]:
-    """Prefer the audio sibling File Path inside each GetLinkedItems group."""
+    """Prefer audio File Path(s) inside each GetLinkedItems group."""
     seen_groups = set()
     out: List[dict] = []
     for item in items:
@@ -225,41 +303,7 @@ def group_and_dedupe(items: Sequence[Any]) -> List[dict]:
         if group_ids in seen_groups:
             continue
         seen_groups.add(group_ids)
-
-        audio = []
-        video = []
-        other = []
-        for m in members:
-            track = (
-                _call(m.GetTrackTypeAndIndex)
-                if has_method(m, "GetTrackTypeAndIndex")
-                else None
-            )
-            kind = track[0] if isinstance(track, (list, tuple)) and track else None
-            if kind == "audio":
-                audio.append(m)
-            elif kind == "video":
-                video.append(m)
-            else:
-                other.append(m)
-        chosen = (audio or video or other or [item])[0]
-        mp = _call(chosen.GetMediaPoolItem) if has_method(chosen, "GetMediaPoolItem") else None
-        file_path = None
-        if mp and has_method(mp, "GetClipProperty"):
-            file_path = _call(mp.GetClipProperty, "File Path")
-        out.append(
-            {
-                "chosen_name": _call(chosen.GetName),
-                "chosen_track": json_safe(
-                    _call(chosen.GetTrackTypeAndIndex)
-                    if has_method(chosen, "GetTrackTypeAndIndex")
-                    else None
-                ),
-                "file_path": json_safe(file_path),
-                "preferred_audio_sibling": bool(audio),
-                "group_size": len(group_ids),
-            }
-        )
+        out.extend(dedupe_linked_group([_member_row(m) for m in members]))
     return out
 
 
