@@ -36,3 +36,5 @@ jobs:
         run: python3 -m unittest tests.unit.test_perfectvoice_time tests.unit.test_selection_dedupe
       - name: Panel resolve JS tests (dedupe + Appendix A)
         run: node --test host/com.perfectvoice.panel/resolve/*.test.js
+      - name: macOS pkg dry-run (unsigned, no weights, no user Python)
+        run: bash installer/macos/build-pkg.sh --dry-run

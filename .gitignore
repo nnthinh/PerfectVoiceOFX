@@ -43,6 +43,9 @@ host/**/WorkflowIntegration.node
 # Spike Mach-O (built by scripts/spikes/build-hello-engine.sh)
 scripts/spikes/hello-engine
 
+# macOS installer artifacts (unsigned local pkgs)
+installer/macos/dist/
+
 # IDE / editor
 .idea/
 .vscode/

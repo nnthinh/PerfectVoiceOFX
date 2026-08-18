@@ -1,0 +1,13 @@
+PerfectVoice is installed in your user Library.
+
+Restart DaVinci Resolve Studio, then open
+Workspace → Workflow Integrations → PerfectVoice.
+
+Engine path (§3.8): PERFECTVOICE_ENGINE (absolute), then
+  ~/Library/Application Support/PerfectVoice/engine/perfectvoice-engine
+
+If the panel does not appear, confirm Resolve is scanning:
+
+  ~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/
+
+This package does not default to /Library. Demucs weights are not bundled.

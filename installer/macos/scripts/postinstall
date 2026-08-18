@@ -1,0 +1,62 @@
+#!/bin/bash
+# Finalize a *user-space* install. Never write the panel or engine to /Library.
+# $2 is the Installer destination (user home when currentUserHome is used).
+set -euo pipefail
+
+NODE_SRC="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Workflow Integrations/Examples/SamplePlugin/WorkflowIntegration.node"
+
+resolve_home() {
+  local dest="${2:-}"
+  local u=""
+  if [ -n "$dest" ] && [ "$dest" != "/" ] \
+      && [[ "$dest" != /Library* ]] && [[ "$dest" != /Applications* ]] \
+      && [[ "$dest" != /var/* ]] && [[ "$dest" != /private/var* ]]; then
+    printf '%s\n' "$dest"
+    return 0
+  fi
+  u="${USER:-}"
+  if [ -z "$u" ] || [ "$u" = "root" ]; then
+    u="$(stat -f%Su /dev/console 2>/dev/null || true)"
+  fi
+  if [ -n "$u" ] && [ "$u" != "root" ]; then
+    eval echo "~$u"
+    return 0
+  fi
+  if [ -n "${HOME:-}" ] && [ "$HOME" != "/var/root" ] && [ "$HOME" != "/root" ]; then
+    printf '%s\n' "$HOME"
+    return 0
+  fi
+  echo "postinstall: cannot resolve a user home (refusing /Library)" >&2
+  exit 2
+}
+
+HOME_DIR="$(resolve_home "${1:-}" "${2:-}")"
+ENGINE="$HOME_DIR/Library/Application Support/PerfectVoice/engine/perfectvoice-engine"
+PANEL="$HOME_DIR/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/com.perfectvoice.panel"
+
+if [[ "$HOME_DIR" == /Library* ]] || [ "$HOME_DIR" = "/" ]; then
+  echo "postinstall: refusing system destination $HOME_DIR" >&2
+  exit 2
+fi
+
+if [ -f "$ENGINE" ]; then
+  chmod 755 "$ENGINE" || true
+fi
+
+if [ -f "$NODE_SRC" ]; then
+  mkdir -p "$PANEL"
+  cp "$NODE_SRC" "$PANEL/WorkflowIntegration.node"
+  echo "copied WorkflowIntegration.node from Resolve Developer examples"
+else
+  echo "WARNING: WorkflowIntegration.node not found at $NODE_SRC"
+  echo "Panel will try the Resolve Developer path at runtime."
+fi
+
+echo "PerfectVoice installed (user-space):"
+echo "  engine: $ENGINE"
+echo "  panel:  $PANEL"
+echo "Restart DaVinci Resolve Studio → Workspace → Workflow Integrations → PerfectVoice."
+echo "This pkg ships hello-engine (spawn contract). Production engine is a PyInstaller onedir later."
+echo "Demucs weights are not included. Use Download model in the panel."
+
+exit 0
