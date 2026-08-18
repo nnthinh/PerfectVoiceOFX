@@ -1,0 +1,9 @@
+# Fixtures are generated in-test. Never commit audio or weight blobs.
+*.wav
+*.aif
+*.aiff
+*.flac
+*.mp3
+*.th
+*.bin
+*.safetensors
