@@ -7,5 +7,6 @@ Optional v1 stage (*Reduce residual environmental noise*, default off).
 - Weights: MIT and Apache-2.0
 
 DeepFilterNet terms are independent of Demucs weight terms. PerfectVoice
-does not use DeepFilterNet as a substitute for Demucs. Fetch (later PR)
-is a separate script/endpoint from official Demucs download.
+does not use DeepFilterNet as a substitute for Demucs. Fetch is
+``scripts/download_deepfilternet.py``, separate from official Demucs
+download. Infer never auto-fetches.

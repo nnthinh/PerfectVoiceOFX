@@ -27,4 +27,4 @@ jobs:
       - name: Engine extract/resample/blend tests
         run: |
           python3 -m pip install --user 'jsonschema>=4.18' 'numpy>=1.24' 'soxr>=0.5'
-          python3 -m unittest tests.unit.test_resample_sync tests.unit.test_blend
+          python3 -m unittest tests.unit.test_resample_sync tests.unit.test_blend tests.unit.test_enhance

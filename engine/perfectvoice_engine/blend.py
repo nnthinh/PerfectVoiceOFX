@@ -1,8 +1,9 @@
 """Wet/dry blend, output gain, optional mono mid, project-rate WAV.
 
 ``wet_dry_sample_rate`` is derived from ``enhancer`` here. The client
-must not send that field. DeepFilterNet inference is PR 05d — the
-48 kHz node is identity so graph lengths stay testable.
+must not send that field. When enhancer=deepfilternet3, DeepFilterNet 3
+runs on vocals only at 48 kHz before wet/dry. Missing enhancer raises
+— it does not no-op.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from perfectvoice_engine.enhance import enhance as enhance_vocals
 from perfectvoice_engine.ffmpeg_io import (
     BWF_ORIGINATOR,
     WavInfo,
@@ -201,7 +203,8 @@ def blend(
 
     x = to_wet_dry_rate(dry, in_sample_rate, enhancer)
     v = to_wet_dry_rate(vocals, in_sample_rate, enhancer)
-    # DFN3 runs on v only after this resample (PR 05d). Identity here.
+    if enhancer == ENHANCER_DEEPFILTERNET3:
+        v = enhance_vocals(v, wd_sr)
 
     y = wet_dry_mix(x, v, wet=w)
     y, _ = _as_frames(y)

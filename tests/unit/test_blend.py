@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -32,6 +33,7 @@ from perfectvoice_engine.blend import (  # noqa: E402
     to_wet_dry_rate,
     wet_dry_mix,
 )
+from perfectvoice_engine.enhance import EnhancerNotInstalled  # noqa: E402
 from perfectvoice_engine.ffmpeg_io import (  # noqa: E402
     BWF_ORIGINATOR,
     FFmpegError,
@@ -46,6 +48,19 @@ def _have_ffmpeg() -> bool:
         return True
     except FFmpegError:
         return False
+
+
+def _identity_enhance(samples: np.ndarray, sample_rate: int, **kwargs: object) -> np.ndarray:
+    if int(sample_rate) != 48000:
+        raise AssertionError(f"DFN must run at 48 kHz, got {sample_rate}")
+    return np.array(samples, dtype=np.float32, copy=True)
+
+
+def _mock_dfn_identity():
+    return patch(
+        "perfectvoice_engine.blend.enhance_vocals",
+        side_effect=_identity_enhance,
+    )
 
 
 def _stereo_sines(n: int, sr: int, freqs: tuple[float, float], amp: float) -> np.ndarray:
@@ -164,14 +179,15 @@ class WetDryIdentityTests(unittest.TestCase):
         n = 44100
         x = _stereo_sines(n, 44100, (440.0, 550.0), 0.2)
         v = _stereo_sines(n, 44100, (660.0, 770.0), 0.1)
-        result = blend(
-            x,
-            v,
-            in_sample_rate=44100,
-            enhancer="deepfilternet3",
-            project_sample_rate=48000,
-            wet=1.0,
-        )
+        with _mock_dfn_identity():
+            result = blend(
+                x,
+                v,
+                in_sample_rate=44100,
+                enhancer="deepfilternet3",
+                project_sample_rate=48000,
+                wet=1.0,
+            )
         expect = to_wet_dry_rate(v, 44100, "deepfilternet3")
         self.assertEqual(result.wet_dry_sample_rate, 48000)
         self.assertEqual(result.sample_count, result.wet_dry_sample_count)
@@ -220,24 +236,79 @@ class GainMonoTests(unittest.TestCase):
 
 class DfnProjectRateGraphTests(unittest.TestCase):
     def test_dfn3_blends_at_48k_before_96k_project(self) -> None:
-        # DFN inference is identity (PR 05d). Only the wet/dry domain matters.
         duration = 1.0
         in_sr = 44100
         n = int(round(duration * in_sr))
         x = _stereo_sines(n, in_sr, (440.0, 550.0), 0.2)
         v = _stereo_sines(n, in_sr, (660.0, 770.0), 0.1)
-        result = blend(
-            x,
-            v,
-            in_sample_rate=in_sr,
-            enhancer="deepfilternet3",
-            project_sample_rate=96000,
-        )
+        with _mock_dfn_identity():
+            result = blend(
+                x,
+                v,
+                in_sample_rate=in_sr,
+                enhancer="deepfilternet3",
+                project_sample_rate=96000,
+            )
         self.assertEqual(result.wet_dry_sample_rate, 48000)
         self.assertEqual(result.project_sample_rate, 96000)
         self.assertLessEqual(abs(result.wet_dry_sample_count - round(duration * 48000)), 1)
         self.assertLessEqual(abs(result.sample_count - round(duration * 96000)), 1)
         self.assertNotEqual(result.wet_dry_sample_count, result.sample_count)
+
+    def test_dfn3_runs_on_vocals_only_at_48k(self) -> None:
+        n = 4410
+        x = np.full((n, 2), 0.2, dtype=np.float32)
+        v = np.full((n, 2), 0.8, dtype=np.float32)
+        calls: list[tuple[np.ndarray, int]] = []
+
+        def spy(samples: np.ndarray, sample_rate: int, **kwargs: object) -> np.ndarray:
+            calls.append((np.array(samples, dtype=np.float32, copy=True), int(sample_rate)))
+            return np.asarray(samples, dtype=np.float32) * np.float32(0.5)
+
+        with patch("perfectvoice_engine.blend.enhance_vocals", side_effect=spy):
+            result = blend(
+                x,
+                v,
+                in_sample_rate=48000,
+                enhancer="deepfilternet3",
+                project_sample_rate=48000,
+                wet=1.0,
+            )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], 48000)
+        np.testing.assert_allclose(calls[0][0], v, rtol=0, atol=1e-6)
+        np.testing.assert_allclose(result.samples, v * np.float32(0.5), rtol=0, atol=1e-6)
+
+    def test_none_does_not_call_enhance(self) -> None:
+        x = np.ones((32, 2), dtype=np.float32)
+        v = np.zeros((32, 2), dtype=np.float32)
+        with patch("perfectvoice_engine.blend.enhance_vocals") as mocked:
+            blend(
+                x,
+                v,
+                in_sample_rate=44100,
+                enhancer="none",
+                project_sample_rate=44100,
+                wet=0.0,
+            )
+            mocked.assert_not_called()
+
+    def test_dfn3_does_not_silently_noop_when_missing(self) -> None:
+        x = np.ones((64, 2), dtype=np.float32)
+        v = np.zeros((64, 2), dtype=np.float32)
+        with patch(
+            "perfectvoice_engine.enhance.is_enhancer_installed",
+            return_value=False,
+        ):
+            with self.assertRaises(EnhancerNotInstalled) as ctx:
+                blend(
+                    x,
+                    v,
+                    in_sample_rate=48000,
+                    enhancer="deepfilternet3",
+                    project_sample_rate=48000,
+                )
+        self.assertIn("enhancer not installed", str(ctx.exception).lower())
 
     def test_none_blends_at_44100_even_when_project_is_96k(self) -> None:
         duration = 1.0
@@ -267,15 +338,16 @@ class BlendWavTests(unittest.TestCase):
         v = _stereo_sines(n, in_sr, (660.0, 770.0), 0.1)
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "voice.wav"
-            result = blend_to_wav(
-                dest,
-                x,
-                v,
-                in_sample_rate=in_sr,
-                enhancer="deepfilternet3",
-                project_sample_rate=96000,
-                sample_format="pcm24",
-            )
+            with _mock_dfn_identity():
+                result = blend_to_wav(
+                    dest,
+                    x,
+                    v,
+                    in_sample_rate=in_sr,
+                    enhancer="deepfilternet3",
+                    project_sample_rate=96000,
+                    sample_format="pcm24",
+                )
             self.assertEqual(result.wet_dry_sample_rate, 48000)
             self.assertLessEqual(
                 abs(result.wet_dry_sample_count - round(duration * 48000)), 1
