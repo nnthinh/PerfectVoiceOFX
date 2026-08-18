@@ -11,16 +11,20 @@ const {
     contentSample,
     placeParamsFromResult,
 } = require("./job");
+const fs = require("fs");
 const http = require("http");
-const { computePlace, muteOriginalClips } = require("./place");
+const os = require("os");
+const { computePlace, muteOriginalClips, writeSilenceWav } = require("./place");
 const {
     parseSseBuffer,
     createJob,
     getJob,
     cancelJob,
     downloadModel,
+    getPublicStatus,
     __setSessionForTests,
 } = require("../engine");
+const { removeAccompaniment, __resetActiveForTests } = require("../jobs");
 
 function sampleInspect(overrides) {
     const clip = {
@@ -236,6 +240,231 @@ describe("muteOriginalClips", () => {
         assert.equal(result.ok, true);
         assert.equal(result.muted, 1);
         assert.deepEqual(calls, [false]);
+    });
+});
+
+function mockResolveTimeline(opts) {
+    const muteCalls = opts.muteCalls;
+    const placeCalls = opts.placeCalls;
+    const dump = {
+        "File Path": "/Volumes/Media/A001.wav",
+        "Sample Rate": "48000",
+        Duration: 2,
+    };
+    const audio = {
+        GetName: () => "A001",
+        GetUniqueId: () => "aud",
+        GetTrackTypeAndIndex: () => ["audio", 1],
+        GetLinkedItems: () => [],
+        GetMediaPoolItem: () => ({
+            GetClipProperty: (key) => {
+                if (key == null || key === "") return dump;
+                return dump[key];
+            },
+        }),
+        GetStart: () => 86400,
+        GetDuration: () => 24,
+        GetSourceStartTime: () => 0.2,
+        GetSourceEndTime: () => 1.2,
+        GetFusionCompCount: () => 0,
+        GetVoiceIsolationState: () => ({ isEnabled: false }),
+        GetSourceAudioChannelMapping: () =>
+            JSON.stringify({ embedded_audio_channels: 2, track_mapping: { "1": { type: "Stereo" } } }),
+        GetProperty: () => ({}),
+        SetClipEnabled: (v) => {
+            muteCalls.push(v);
+            return true;
+        },
+    };
+    let audioTrackCount = 1;
+    const timeline = {
+        GetName: () => "TL",
+        GetSelectedClips: () => [audio],
+        GetTrackCount: (typ) => (typ === "audio" ? audioTrackCount : 1),
+        GetTrackName: (typ, idx) => (typ === "audio" && idx === 1 ? "Audio 1" : ""),
+        AddTrack: () => {
+            audioTrackCount += 1;
+            return true;
+        },
+        SetTrackName: () => true,
+        GetItemListInTrack() {
+            throw new Error("must not iterate the timeline");
+        },
+    };
+    const mediaPool = {
+        GetRootFolder: () => ({ GetName: () => "Master", GetSubFolderList: () => [] }),
+        AddSubFolder: (_root, name) => ({ GetName: () => name }),
+        SetCurrentFolder: () => true,
+        ImportMedia: () => [{ GetName: () => "isolated" }],
+        AppendToTimeline: (infos) => {
+            placeCalls.push(infos && infos[0]);
+            return infos;
+        },
+    };
+    return {
+        audio,
+        muteCalls,
+        placeCalls,
+        resolve: {
+            GetVersion: () => [21, 0, 4, ""],
+            GetVersionString: () => "21.0.4",
+            GetProductName: () => "DaVinci Resolve Studio",
+            GetProjectManager: () => ({
+                GetCurrentProject: () => ({
+                    GetCurrentTimeline: () => timeline,
+                    GetSetting: (key) => {
+                        if (key === "timelineFrameRate") return "24";
+                        if (key === "timelineSampleRate") return "48000";
+                        return undefined;
+                    },
+                    GetMediaPool: () => mediaPool,
+                }),
+            }),
+        },
+    };
+}
+
+async function withMockSidecar(handler, fn) {
+    const token = "b".repeat(64);
+    const server = http.createServer(handler);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    __setSessionForTests({
+        child: { exitCode: null },
+        token,
+        readyUrl: `http://127.0.0.1:${port}`,
+        enginePath: "/tmp/fake-engine",
+        health: { ok: true, protocol_version: 1 },
+    });
+    try {
+        return await fn({ token, port });
+    } finally {
+        __resetActiveForTests();
+        __setSessionForTests(null);
+        await new Promise((resolve) => server.close(resolve));
+    }
+}
+
+function jobSidecar({ outputPath, clips, capture }) {
+    return (req, res) => {
+        if (req.method === "POST" && req.url === "/v1/jobs") {
+            let raw = "";
+            req.on("data", (c) => {
+                raw += c;
+            });
+            req.on("end", () => {
+                capture.body = JSON.parse(raw);
+                res.writeHead(202, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ id: "22222222-2222-4222-8222-222222222222", status: "queued" }));
+            });
+            return;
+        }
+        if (req.method === "GET" && req.url === "/v1/jobs/22222222-2222-4222-8222-222222222222") {
+            const clipId =
+                capture.body && capture.body.clips && capture.body.clips[0]
+                    ? capture.body.clips[0].clip_id
+                    : "11111111-1111-4111-8111-111111111111";
+            const rows =
+                clips !== undefined
+                    ? clips
+                    : [
+                          {
+                              clip_id: clipId,
+                              output_path: outputPath,
+                              handles_left_actual: 0.2,
+                              handles_right_actual: 0.5,
+                          },
+                      ];
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+                JSON.stringify({
+                    id: "22222222-2222-4222-8222-222222222222",
+                    status: "done",
+                    token: "should-not-leak",
+                    readyUrl: "http://127.0.0.1/secret",
+                    clips: rows,
+                }),
+            );
+            return;
+        }
+        if (req.method === "GET" && req.url.endsWith("/events")) {
+            res.writeHead(200, { "Content-Type": "text/event-stream" });
+            res.write('event: done\ndata: {"id":"22222222-2222-4222-8222-222222222222"}\n\n');
+            res.end();
+            return;
+        }
+        res.writeHead(404);
+        res.end();
+    };
+}
+
+describe("removeAccompaniment (mock sidecar + Resolve)", () => {
+    it("POSTs content t0, places with handles_left_actual, skips mute when place fails", async () => {
+        const capture = {};
+        const muteCalls = [];
+        const placeCalls = [];
+        const { resolve } = mockResolveTimeline({ muteCalls, placeCalls });
+        await withMockSidecar(jobSidecar({ outputPath: "/tmp/pv-missing-isolated.wav", capture }), async () => {
+            const result = await removeAccompaniment(resolve, { muteOriginal: true });
+            assert.equal(result.ok, false);
+            assert.equal(result.mute, null);
+            assert.deepEqual(muteCalls, []);
+            assert.equal(capture.body.clips[0].source_in_sample, 9600);
+            assert.equal(capture.body.params.enhancer, "none");
+            assert.equal(Object.prototype.hasOwnProperty.call(result.job, "token"), false);
+            assert.equal(Object.prototype.hasOwnProperty.call(result.job, "readyUrl"), false);
+            const status = getPublicStatus();
+            assert.equal(Object.prototype.hasOwnProperty.call(status, "token"), false);
+            assert.match(result.error || "", /WAV not found|place/i);
+        });
+    });
+
+    it("mutes only after a successful place", async () => {
+        const wavPath = path.join(os.tmpdir(), `pv-isolated-${process.pid}.wav`);
+        writeSilenceWav(wavPath, 48000, 96000, 2);
+        const capture = {};
+        const muteCalls = [];
+        const placeCalls = [];
+        const { resolve } = mockResolveTimeline({ muteCalls, placeCalls });
+        try {
+            await withMockSidecar(jobSidecar({ outputPath: wavPath, capture }), async () => {
+                const result = await removeAccompaniment(resolve, { muteOriginal: true });
+                assert.equal(result.ok, true, result.error);
+                assert.ok(result.mute && result.mute.muted === 1);
+                assert.deepEqual(muteCalls, [false]);
+                assert.equal(result.placed[0].handlesLeftActual, 0.2);
+                assert.equal(placeCalls[0].startFrame, 5);
+                assert.equal(capture.body.clips[0].source_in_sample, 9600);
+            });
+        } finally {
+            try {
+                fs.unlinkSync(wavPath);
+            } catch {
+                // ignore
+            }
+        }
+    });
+
+    it("does not mute when done job has empty clips", async () => {
+        const muteCalls = [];
+        const { resolve } = mockResolveTimeline({ muteCalls, placeCalls: [] });
+        await withMockSidecar(jobSidecar({ clips: [], capture: {} }), async () => {
+            const result = await removeAccompaniment(resolve, { muteOriginal: true });
+            assert.equal(result.ok, false);
+            assert.equal(result.mute, null);
+            assert.deepEqual(muteCalls, []);
+            assert.match(result.error, /without clip results/);
+        });
+    });
+});
+
+describe("downloadModel when engine is down", () => {
+    it("says the engine is not connected instead of not-implemented", async () => {
+        __setSessionForTests(null);
+        const dl = await downloadModel("htdemucs");
+        assert.equal(dl.ok, false);
+        assert.equal(dl.notImplemented, undefined);
+        assert.match(dl.error, /not connected/i);
     });
 });
 

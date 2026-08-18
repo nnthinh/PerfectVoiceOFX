@@ -43,6 +43,11 @@ function dedupeLinkedGroup(members) {
             trackType,
             trackIndex,
             item: member.item,
+            // Needed by inspect/job: dump holds Sample Rate / Duration.
+            mediaPoolItem: member.mediaPoolItem,
+            clipPropertyDump: member.clipPropertyDump,
+            filePathKey: member.filePathKey,
+            filePathProbed: member.filePathProbed,
         };
     }
 

@@ -11,6 +11,7 @@ const {
     call,
     callValue,
     isCallable,
+    clipPropertyDump,
     collectSelected,
     groupSelectedItems,
     parseVersionFields,
@@ -125,8 +126,16 @@ function liveProjectSampleRate(project) {
 
 function inspectClip(row, ctx) {
     const item = row.item;
-    const mp = row.mediaPoolItem;
-    const dump = row.clipPropertyDump || {};
+    const mp =
+        row.mediaPoolItem ||
+        (item ? callValue(item, "GetMediaPoolItem") : null);
+    const dumped = row.clipPropertyDump;
+    const dump =
+        dumped && typeof dumped === "object" && Object.keys(dumped).length
+            ? dumped
+            : mp
+              ? clipPropertyDump(mp)
+              : {};
     const times = item ? sourceTimes(item) : { t0: null, t1: null, source: null };
     const srcFpsHit = fpsFromDump(dump);
     const srcFps = srcFpsHit ? srcFpsHit.fps : null;

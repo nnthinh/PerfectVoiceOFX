@@ -60,7 +60,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         startBtn.disabled = jobRunning;
         inspectBtn.disabled = jobRunning;
         placeBtn.disabled = jobRunning;
-        downloadBtn.disabled = jobRunning;
+        downloadBtn.disabled = jobRunning || !healthy;
         if (jobRunning) return;
         const current = jobProgress.textContent || "";
         const isHint =

@@ -192,18 +192,38 @@ async function removeAccompaniment(resolve, options, onEvent) {
         };
     }
 
+    const jobClips = record && Array.isArray(record.clips) ? record.clips : [];
+    if (!jobClips.length) {
+        active = null;
+        return {
+            ok: false,
+            error: "Job finished without clip results.",
+            inspect,
+            job: publicJob(record),
+            jobId: accepted.id,
+            placed: [],
+            mute: null,
+            warnings: built.warnings,
+        };
+    }
+
     const placed = placeResults(resolve, inspect, origins, record);
+    const placedOk = placed.filter((p) => p.ok);
     const placeFailed = placed.filter((p) => !p.ok);
+    // Mute only clips that actually landed — never mute when place failed.
     let mute = null;
-    if (opts.muteOriginal) {
+    if (opts.muteOriginal && placedOk.length) {
+        const okIds = new Set(placedOk.map((p) => p.clipId).filter(Boolean));
         mute = muteOriginalClips(
             resolve,
-            built.origins.map((c) => ({
-                uniqueId: c.uniqueId,
-                filePath: c.filePath,
-                recordFrame: c.recordFrame,
-                name: c.name,
-            })),
+            origins
+                .filter((row) => row.manifest && okIds.has(row.manifest.clip_id))
+                .map((row) => ({
+                    uniqueId: row.origin && row.origin.uniqueId,
+                    filePath: row.origin && row.origin.filePath,
+                    recordFrame: row.origin && row.origin.recordFrame,
+                    name: row.origin && row.origin.name,
+                })),
         );
     }
 
@@ -253,10 +273,15 @@ function activeJobId() {
     return active ? active.id : null;
 }
 
+function __resetActiveForTests() {
+    active = null;
+}
+
 module.exports = {
     removeAccompaniment,
     cancelActiveJob,
     engineHealthy,
     activeJobId,
     ENGINE_UNHEALTHY,
+    __resetActiveForTests,
 };

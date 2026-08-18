@@ -173,7 +173,7 @@ describe("inspectSelection (mock Resolve)", () => {
     it("dedupes linked A/V and reports reject reasons", () => {
         const mpA = {
             GetClipProperty: (key) => {
-                const dump = { "File Path": "/media/A001.wav" };
+                const dump = { "File Path": "/media/A001.wav", "Sample Rate": "48000", Duration: 2 };
                 if (key == null || key === "") return dump;
                 return dump[key];
             },
@@ -233,6 +233,7 @@ describe("inspectSelection (mock Resolve)", () => {
         assert.equal(result.source, "GetSelectedClips");
         assert.equal(result.jobCount, 1);
         assert.equal(result.clips[0].filePath, "/media/A001.wav");
+        assert.equal(result.clips[0].sampleRate, 48000);
         assert.ok(Math.abs(result.clips[0].hLeftActual - 0.2) < 1e-12);
         assert.equal(result.clips[0].recordFrame, 86400);
         assert.equal(result.acceptedCount, 1);

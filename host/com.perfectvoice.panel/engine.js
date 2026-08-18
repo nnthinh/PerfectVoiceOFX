@@ -392,12 +392,11 @@ async function downloadModel(name) {
     if (!isAlive()) {
         return {
             ok: false,
-            notImplemented: true,
-            error: "Download model is not implemented in this release.",
+            error: "Engine is not connected.",
         };
     }
     const res = await requestJson("POST", "/v1/models/download", { name: model });
-    if (res.status === 404) {
+    if (res.status === 404 || res.status === 405 || res.status === 501) {
         return {
             ok: false,
             notImplemented: true,
