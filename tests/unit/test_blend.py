@@ -310,6 +310,32 @@ class DfnProjectRateGraphTests(unittest.TestCase):
                 )
         self.assertIn("enhancer not installed", str(ctx.exception).lower())
 
+    def test_dfn3_config_ini_only_raises_not_systemexit(self) -> None:
+        x = np.ones((64, 2), dtype=np.float32)
+        v = np.zeros((64, 2), dtype=np.float32)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.ini").write_text("[train]\n", encoding="utf-8")
+            with (
+                patch("perfectvoice_engine.enhance._df_importable", return_value=True),
+                patch(
+                    "perfectvoice_engine.enhance.default_model_dir",
+                    return_value=root,
+                ),
+            ):
+                with self.assertRaises(EnhancerNotInstalled) as ctx:
+                    try:
+                        blend(
+                            x,
+                            v,
+                            in_sample_rate=48000,
+                            enhancer="deepfilternet3",
+                            project_sample_rate=48000,
+                        )
+                    except SystemExit:
+                        self.fail("SystemExit leaked from config.ini-only tree")
+        self.assertIn("enhancer not installed", str(ctx.exception).lower())
+
     def test_none_blends_at_44100_even_when_project_is_96k(self) -> None:
         duration = 1.0
         in_sr = 44100

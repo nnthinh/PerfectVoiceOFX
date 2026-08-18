@@ -52,13 +52,22 @@ def default_model_dir() -> Path:
     return root / "PerfectVoice" / "models" / "deepfilternet"
 
 
-def _config_ini(model_dir: Path) -> Path | None:
-    for candidate in (
-        model_dir / "config.ini",
-        model_dir / "DeepFilterNet3" / "config.ini",
-    ):
-        if candidate.is_file():
-            return candidate
+def _checkpoints_ready(base: Path) -> bool:
+    ckpt = base / "checkpoints"
+    if not ckpt.is_dir():
+        return False
+    try:
+        return any(ckpt.iterdir())
+    except OSError:
+        return False
+
+
+def _model_base(model_dir: Path) -> Path | None:
+    """Dir with both config.ini and a non-empty checkpoints/ (not ini alone)."""
+    root = Path(model_dir)
+    for candidate in (root, root / "DeepFilterNet3"):
+        if (candidate / "config.ini").is_file() and _checkpoints_ready(candidate):
+            return candidate.resolve()
     return None
 
 
@@ -73,7 +82,7 @@ def is_enhancer_installed(model_dir: Path | None = None) -> bool:
     if not _df_importable():
         return False
     root = Path(model_dir) if model_dir is not None else default_model_dir()
-    return _config_ini(root) is not None
+    return _model_base(root) is not None
 
 
 def _as_frames(samples: np.ndarray) -> tuple[np.ndarray, bool]:
@@ -88,31 +97,38 @@ def _as_frames(samples: np.ndarray) -> tuple[np.ndarray, bool]:
     return np.ascontiguousarray(arr, dtype=np.float32), squeeze
 
 
-def _run_dfn(frames: np.ndarray, model_dir: Path) -> np.ndarray:
-    """Local-dir only. A pretrained name would make init_df auto-fetch."""
-    cfg = _config_ini(model_dir)
-    if cfg is None:
-        raise EnhancerNotInstalled(f"weights missing under {model_dir}")
-    # Absolute existing dir only. The bare name "DeepFilterNet3" makes
-    # init_df() auto-download; a filesystem path does not.
-    base = cfg.parent.resolve()
-    if not (base / "config.ini").is_file():
-        raise EnhancerNotInstalled(f"config.ini missing under {base}")
-
+def _import_dfn():
     try:
         import torch
         from df.enhance import enhance as df_enhance
         from df.enhance import init_df
     except ImportError as exc:
         raise EnhancerNotInstalled("package missing") from exc
+    return torch, df_enhance, init_df
 
-    model, df_state, _, _ = init_df(
-        model_base_dir=str(base),
-        log_file=None,
-        log_level="ERROR",
-    )
-    audio = torch.from_numpy(np.ascontiguousarray(frames.T))
-    out = df_enhance(model, df_state, audio, pad=True)
+
+def _run_dfn(frames: np.ndarray, model_dir: Path) -> np.ndarray:
+    """Local-dir only. A pretrained name would make init_df auto-fetch."""
+    # config.ini alone is not enough — init_df exit(1)s on a missing ckpt.
+    base = _model_base(model_dir)
+    if base is None:
+        raise EnhancerNotInstalled(f"weights missing under {model_dir}")
+    # Absolute existing dir only. The bare name "DeepFilterNet3" makes
+    # init_df() auto-download; a filesystem path does not.
+    if not (base / "config.ini").is_file() or not _checkpoints_ready(base):
+        raise EnhancerNotInstalled(f"incomplete weights under {base}")
+
+    torch, df_enhance, init_df = _import_dfn()
+    try:
+        model, df_state, _, _ = init_df(
+            model_base_dir=str(base),
+            log_file=None,
+            log_level="ERROR",
+        )
+        audio = torch.from_numpy(np.ascontiguousarray(frames.T))
+        out = df_enhance(model, df_state, audio, pad=True)
+    except SystemExit as exc:
+        raise EnhancerNotInstalled("checkpoint load failed") from exc
     return np.ascontiguousarray(out.detach().cpu().numpy().T, dtype=np.float32)
 
 

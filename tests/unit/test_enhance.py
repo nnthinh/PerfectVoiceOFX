@@ -33,6 +33,11 @@ from perfectvoice_engine.enhance import (  # noqa: E402
 )
 
 
+def _checkpoints_nonempty(base: Path) -> bool:
+    ckpt = base / "checkpoints"
+    return ckpt.is_dir() and any(ckpt.iterdir())
+
+
 def _top_level_imports(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     names: set[str] = set()
@@ -76,6 +81,118 @@ class EnhanceContractTests(unittest.TestCase):
     def test_empty_dir_is_not_installed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self.assertFalse(is_enhancer_installed(Path(tmp)))
+
+    def test_config_ini_only_is_not_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.ini").write_text("[train]\n", encoding="utf-8")
+            with patch.object(enhance_mod, "_df_importable", return_value=True):
+                self.assertFalse(is_enhancer_installed(root))
+                with self.assertRaises(EnhancerNotInstalled) as ctx:
+                    try:
+                        enhance(
+                            np.zeros((16, 2), dtype=np.float32),
+                            48000,
+                            model_dir=root,
+                        )
+                    except SystemExit:
+                        self.fail("SystemExit leaked from config.ini-only tree")
+            self.assertIn("enhancer not installed", str(ctx.exception).lower())
+
+    def test_empty_checkpoints_is_not_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.ini").write_text("[train]\n", encoding="utf-8")
+            (root / "checkpoints").mkdir()
+            nested = root / "DeepFilterNet3"
+            nested.mkdir()
+            (nested / "config.ini").write_text("[train]\n", encoding="utf-8")
+            with patch.object(enhance_mod, "_df_importable", return_value=True):
+                self.assertFalse(is_enhancer_installed(root))
+                self.assertFalse(is_enhancer_installed(nested))
+
+    def test_complete_tree_is_installed_when_df_importable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.ini").write_text("[train]\n", encoding="utf-8")
+            ckpt = root / "checkpoints"
+            ckpt.mkdir()
+            (ckpt / "model.ckpt").write_bytes(b"x")
+            with patch.object(enhance_mod, "_df_importable", return_value=True):
+                self.assertTrue(is_enhancer_installed(root))
+            with patch.object(enhance_mod, "_df_importable", return_value=False):
+                self.assertFalse(is_enhancer_installed(root))
+
+    def test_run_dfn_passes_absolute_local_dir_not_pretrained_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.ini").write_text("[train]\n", encoding="utf-8")
+            ckpt = root / "checkpoints"
+            ckpt.mkdir()
+            (ckpt / "model.ckpt").write_bytes(b"x")
+            captured: dict[str, object] = {}
+
+            class _Tensor:
+                def detach(self) -> "_Tensor":
+                    return self
+
+                def cpu(self) -> "_Tensor":
+                    return self
+
+                def numpy(self) -> np.ndarray:
+                    return np.zeros((2, 8), dtype=np.float32)
+
+            class _Torch:
+                @staticmethod
+                def from_numpy(arr: np.ndarray) -> np.ndarray:
+                    return arr
+
+            def fake_init_df(model_base_dir: str | None = None, **kwargs: object) -> tuple:
+                captured["model_base_dir"] = model_base_dir
+                return ("model", "state", "suffix", 1)
+
+            def fake_enhance(*args: object, **kwargs: object) -> _Tensor:
+                return _Tensor()
+
+            frames = np.zeros((8, 2), dtype=np.float32)
+            with patch.object(
+                enhance_mod,
+                "_import_dfn",
+                return_value=(_Torch, fake_enhance, fake_init_df),
+            ):
+                out = enhance_mod._run_dfn(frames, root)
+            base = captured["model_base_dir"]
+            self.assertIsInstance(base, str)
+            self.assertNotEqual(base, "DeepFilterNet3")
+            self.assertIsNotNone(base)
+            path = Path(str(base))
+            self.assertTrue(path.is_absolute())
+            self.assertTrue((path / "config.ini").is_file())
+            self.assertTrue(_checkpoints_nonempty(path))
+            self.assertEqual(out.shape, (8, 2))
+
+    def test_run_dfn_converts_systemexit_to_not_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.ini").write_text("[train]\n", encoding="utf-8")
+            ckpt = root / "checkpoints"
+            ckpt.mkdir()
+            (ckpt / "model.ckpt").write_bytes(b"x")
+
+            def boom(**kwargs: object) -> None:
+                raise SystemExit(1)
+
+            with patch.object(
+                enhance_mod, "_import_dfn", return_value=(object(), object(), boom)
+            ):
+                with self.assertRaises(EnhancerNotInstalled) as ctx:
+                    try:
+                        enhance_mod._run_dfn(
+                            np.zeros((8, 2), dtype=np.float32), root
+                        )
+                    except SystemExit:
+                        self.fail("SystemExit leaked from init_df")
+            self.assertIn("enhancer not installed", str(ctx.exception).lower())
 
     def test_mocked_backend_runs_at_48k(self) -> None:
         frames = np.full((32, 2), 0.25, dtype=np.float32)
