@@ -21,7 +21,7 @@ Thiết kế đầy đủ: [docs/design.md](docs/design.md).
 | OS | **macOS 13+ Apple Silicon (arm64)** only |
 | Host | **DaVinci Resolve Studio standalone 20.0+** (khuyến nghị **21.0.4**, 2026-08-05). Tải từ Blackmagic, **không** Mac App Store. 18.6 / 19.x không hỗ trợ. |
 | UI | English (panel, errors). Tài liệu tiếng Việt. |
-| Windows + NVIDIA CUDA | v1.1 — chưa phải v1.0 |
+| Windows + NVIDIA CUDA | v1.1 — [installer/windows/](installer/windows/) (cu126, same IPC) |
 | Intel Mac / Linux | non-goal |
 
 Free Resolve không có Workflow Integration Electron. Studio standalone là bắt buộc.

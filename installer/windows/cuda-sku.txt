@@ -1,0 +1,19 @@
+# PerfectVoice v1.1 Windows CUDA SKU (PR 13).
+# One line of truth for the torch wheel the PyInstaller onedir is built from.
+# The installer copies that onedir — it does not pip-install torch on the editor PC.
+
+sku=cu126
+cuda=12.6
+cuda_range=12.6-12.8
+wheel_index=https://download.pytorch.org/whl/cu126
+torch_min=2.6
+python=3.12
+arch=win_amd64
+driver_min=560
+vc_redist=2015-2022-x64
+vc_redist_url=https://aka.ms/vs/17/release/vc_redist.x64.exe
+protocol_version=1
+engine_name=perfectvoice-engine.exe
+bind=127.0.0.1
+token=token-file-or-stdin
+token_fd=forbidden

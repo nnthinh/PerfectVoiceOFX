@@ -36,3 +36,5 @@ jobs:
         run: python3 -m unittest tests.unit.test_perfectvoice_time tests.unit.test_selection_dedupe
       - name: Panel resolve JS tests (dedupe + Appendix A)
         run: node --test host/com.perfectvoice.panel/resolve/*.test.js
+      - name: Windows installer policy (paths, no weights, same IPC)
+        run: bash installer/windows/check-policy.sh
