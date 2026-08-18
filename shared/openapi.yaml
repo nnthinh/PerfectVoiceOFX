@@ -75,7 +75,7 @@ paths:
   /v1/jobs/{id}:
     get:
       tags: [jobs]
-      summary: Job snapshot (same shape as job.json when terminal)
+      summary: Job snapshot (HTTP record; job.json only when status=done)
       operationId: getJob
       parameters:
         - $ref: "#/components/parameters/JobId"
@@ -259,19 +259,88 @@ components:
 
     JobRecord:
       description: |
-        HTTP snapshot. Terminal success matches `perfectvoice.job.v1`
-        plus `status`. `handles_*_actual` and `wet_dry_sample_rate` live
-        on each clip result, never on client params.
-      allOf:
-        - $ref: "./schema/job.v1.json"
-        - type: object
-          required: [status]
-          properties:
-            status:
-              type: string
-              enum: [queued, running, done, error, cancelled, cancelling]
-            error:
-              type: string
+        HTTP snapshot for GET /v1/jobs/{id}. On-disk `job.json` stays
+        closed `perfectvoice.job.v1` (no `status` / `error`). This object
+        is independent so those HTTP fields are legal.
+
+        When `status=done`, `clips[]` MUST be the job.v1 `clip_result`
+        shape (`handles_*_actual`, `wet_dry_sample_rate`, …). In-progress
+        / error / cancelled rows may omit those fields.
+      type: object
+      additionalProperties: false
+      required: [id, status]
+      properties:
+        schema:
+          const: perfectvoice.job.v1
+        id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        engine_version:
+          type: string
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        params:
+          $ref: "./schema/params.v1.json"
+        clips:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobClipSnapshot"
+        status:
+          type: string
+          enum: [queued, running, done, error, cancelled, cancelling]
+        error:
+          type: string
+      if:
+        properties:
+          status:
+            const: done
+        required: [status]
+      then:
+        required: [schema, created_at, engine_version, params, clips]
+        properties:
+          clips:
+            type: array
+            minItems: 1
+            items:
+              $ref: "./schema/job.v1.json#/$defs/clip_result"
+
+    JobClipSnapshot:
+      description: |
+        In-progress clip row. Result fields optional until `status=done`,
+        when JobRecord requires job.v1 `clip_result`.
+      type: object
+      additionalProperties: false
+      required: [clip_id]
+      properties:
+        clip_id:
+          type: string
+          format: uuid
+        input_hash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        output_path:
+          type: string
+          minLength: 1
+        output_samples:
+          type: integer
+          minimum: 0
+        handles_left_actual:
+          type: number
+          minimum: 0
+        handles_right_actual:
+          type: number
+          minimum: 0
+        wet_dry_sample_rate:
+          type: integer
+          enum: [44100, 48000]
+        peak:
+          type: number
+          minimum: 0
+        cache_hit:
+          type: boolean
+
 
     Error:
       type: object

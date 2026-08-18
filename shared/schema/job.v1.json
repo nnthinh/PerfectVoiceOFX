@@ -32,7 +32,7 @@
       "description": "Engine semver (also hashed as engine_semver)."
     },
     "params": {
-      "$ref": "https://perfectvoice.local/schema/params.v1.json"
+      "$ref": "params.v1.json"
     },
     "clips": {
       "type": "array",

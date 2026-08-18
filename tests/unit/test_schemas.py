@@ -137,6 +137,10 @@ class SchemaContractTests(unittest.TestCase):
             "handles_left_actual",
         )
 
+    def test_job_params_ref_is_relative(self) -> None:
+        schema = _schema("job.v1.json")
+        self.assertEqual(schema["properties"]["params"]["$ref"], "params.v1.json")
+
     def test_hash_fields_list_is_normative(self) -> None:
         schema = _schema("hash-fields.v1.json")
         self.assertEqual(tuple(schema["required"]), HASH_FIELDS)
