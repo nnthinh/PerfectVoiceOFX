@@ -243,13 +243,24 @@ def _run_cli(bind: str, extra: list[str] | None = None, timeout: float = 5.0) ->
 
 class BindAndTokenUnitTests(unittest.TestCase):
     def test_low_memory_cap_is_two_gib(self) -> None:
-        # duration * rate * ch * 4 > 2 GiB trips the windowed / low-memory path.
+        # Integer n_samples * ch * 4 — same pcm_nbytes as separate.
         self.assertEqual(MEMORY_CAP_BYTES, 2 * 1024 ** 3)
-        rate, ch = 44100, 2
-        # ~90 min stereo f32 @ 44.1 k is under; ~102 min is over.
-        self.assertFalse(needs_low_memory(90 * 60, rate, ch))
-        self.assertTrue(needs_low_memory(102 * 60, rate, ch))
-        self.assertGreater(pcm_nbytes(102 * 60, rate, ch), MEMORY_CAP_BYTES)
+        ch = 2
+        n_under = MEMORY_CAP_BYTES // (ch * 4)
+        n_over = n_under + 1
+        self.assertFalse(needs_low_memory(n_under, ch))
+        self.assertTrue(needs_low_memory(n_over, ch))
+        self.assertGreater(pcm_nbytes(n_over, ch), MEMORY_CAP_BYTES)
+
+    def test_window_constants_come_from_shared_module(self) -> None:
+        from perfectvoice_engine import constants as limits
+        from perfectvoice_engine import serve as serve_mod
+
+        self.assertIs(serve_mod.WINDOW_SECONDS, limits.WINDOW_SECONDS)
+        self.assertIs(serve_mod.WINDOW_OVERLAP_SECONDS, limits.WINDOW_OVERLAP_SECONDS)
+        self.assertIs(serve_mod.MEMORY_CAP_BYTES, limits.MEMORY_CAP_BYTES)
+        self.assertIs(serve_mod.pcm_nbytes, limits.pcm_nbytes)
+        self.assertIs(serve_mod.raise_if_cancelled, limits.raise_if_cancelled)
 
     def test_reject_wan_bind_values(self) -> None:
         for host in ("0.0.0.0", "::", "", "localhost", "127.0.0.2"):

@@ -30,6 +30,7 @@ from perfectvoice_engine.separate import (  # noqa: E402
     WINDOW_SECONDS,
     JobCancelled,
     SeparateRequest,
+    _to_model_input,
     exceeds_memory_cap,
     overlap_add,
     pcm_nbytes,
@@ -47,6 +48,8 @@ _SINE_HZ = 440.0
 _SINE_AMP = 0.5
 # FakeSeparator gain — keep in lockstep with the mock below.
 _MOCK_GAIN = 0.5
+# Odd-window DC so OLA is tested when adjacent stems disagree.
+_ODD_DC = 0.02
 _DISC_LIMIT_DBFS = -80.0
 
 
@@ -107,9 +110,14 @@ class FakeSeparator:
 
     def separate_tensor(self, wav: Any, sr: int | None = None) -> tuple[Any, dict[str, Any]]:
         self.separate_calls += 1
+        callback = self.kwargs.get("callback")
+        if callable(callback):
+            callback({"state": "start"})
         arr = np.asarray(wav, dtype=np.float32)
         self.lengths.append(int(arr.shape[-1]))
         vocals = arr * _MOCK_GAIN
+        if callable(callback):
+            callback({"state": "end"})
         return arr, {"vocals": vocals, "drums": arr * 0.0, "bass": arr * 0.0, "other": arr * 0.0}
 
 
@@ -123,7 +131,7 @@ def _separate_mocked(
         patch("perfectvoice_engine.separate._separator_cls", return_value=FakeSeparator),
         patch(
             "perfectvoice_engine.separate._to_model_input",
-            side_effect=lambda arr: np.ascontiguousarray(arr, dtype=np.float32),
+            side_effect=lambda arr: np.array(arr, dtype=np.float32, copy=True),
         ),
         patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
         patch("perfectvoice_engine.separate.WINDOW_SECONDS", _TEST_WINDOW_S),
@@ -190,6 +198,36 @@ class OverlapAddSineTests(unittest.TestCase):
         )
         peak_err = float(np.max(np.abs(out - expected)))
         self.assertLess(20.0 * math.log10(max(peak_err, 1e-20)), _DISC_LIMIT_DBFS)
+
+    def test_ola_is_c0_when_adjacent_stems_disagree(self) -> None:
+        sr = MODEL_SAMPLE_RATE
+        n = int(1.1 * sr)
+        wav = _sine(n, sr)
+        slices = window_slices(n, sr, window_s=_TEST_WINDOW_S, overlap_s=_TEST_OVERLAP_S)
+        _window, overlap = window_hop_samples(
+            sr, window_s=_TEST_WINDOW_S, overlap_s=_TEST_OVERLAP_S
+        )
+        chunks = []
+        for i, (start, end) in enumerate(slices):
+            piece = wav[:, start:end] * _MOCK_GAIN
+            if i % 2 == 1:
+                piece = piece + _ODD_DC
+            chunks.append(piece)
+        out = overlap_add(chunks, slices, n, overlap)
+        leftover = out - wav * _MOCK_GAIN
+        # Common sine removed: remainder must be a slow DC ramp, not a step.
+        leftover_step = float(np.max(np.abs(np.diff(leftover, axis=-1))))
+        self.assertLess(
+            leftover_step,
+            _ODD_DC * 0.1,
+            f"OLA not C0 when stems disagree: leftover step {leftover_step}",
+        )
+        expected = overlap_add(chunks, slices, n, overlap)
+        db = _discontinuity_dbfs(out, expected, [s[0] for s in slices[1:]])
+        self.assertLess(db, _DISC_LIMIT_DBFS)
+        # A hard cut at the first join would jump by ~DC (well above -80 dBFS).
+        hard_db = 20.0 * math.log10(_ODD_DC)
+        self.assertGreater(hard_db, _DISC_LIMIT_DBFS)
 
 
 class SeparateWindowedTests(unittest.TestCase):
@@ -277,7 +315,7 @@ class SeparateWindowedTests(unittest.TestCase):
                 patch("perfectvoice_engine.separate._separator_cls", return_value=CancelAfterFirst),
                 patch(
                     "perfectvoice_engine.separate._to_model_input",
-                    side_effect=lambda arr: np.ascontiguousarray(arr, dtype=np.float32),
+                    side_effect=lambda arr: np.array(arr, dtype=np.float32, copy=True),
                 ),
                 patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
                 patch("perfectvoice_engine.separate.WINDOW_SECONDS", _TEST_WINDOW_S),
@@ -286,6 +324,120 @@ class SeparateWindowedTests(unittest.TestCase):
                 with self.assertRaises(JobCancelled):
                     separate_vocals(req, repo)
         self.assertEqual(FakeSeparator.instances[0].separate_calls, 1)
+
+    def test_cancel_raises_from_demucs_callback_mid_window(self) -> None:
+        FakeSeparator.instances.clear()
+        event = threading.Event()
+
+        class SetThenCall(FakeSeparator):
+            def separate_tensor(self, wav: Any, sr: int | None = None) -> tuple[Any, dict[str, Any]]:
+                event.set()
+                return super().separate_tensor(wav, sr)
+
+        wav = _sine(int(1.1 * MODEL_SAMPLE_RATE))
+        req = SeparateRequest(
+            wav_44100_stereo=wav,
+            model=DEFAULT_MODEL,
+            device="cpu",
+            cancel_event=event,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            manifest = _write_htdemucs_fixture(repo, th_payload=b"cb")
+            with (
+                patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
+                patch("perfectvoice_engine.separate._separator_cls", return_value=SetThenCall),
+                patch(
+                    "perfectvoice_engine.separate._to_model_input",
+                    side_effect=lambda arr: np.array(arr, dtype=np.float32, copy=True),
+                ),
+                patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
+                patch("perfectvoice_engine.separate.WINDOW_SECONDS", _TEST_WINDOW_S),
+                patch("perfectvoice_engine.separate.WINDOW_OVERLAP_SECONDS", _TEST_OVERLAP_S),
+            ):
+                with self.assertRaises(JobCancelled):
+                    separate_vocals(req, repo)
+        self.assertEqual(FakeSeparator.instances[0].separate_calls, 1)
+
+    def test_mocked_separate_c0_when_stems_disagree(self) -> None:
+        FakeSeparator.instances.clear()
+
+        class Disagreeing(FakeSeparator):
+            def separate_tensor(self, wav: Any, sr: int | None = None) -> tuple[Any, dict[str, Any]]:
+                mix, stems = super().separate_tensor(wav, sr)
+                vocals = np.asarray(stems["vocals"], dtype=np.float32)
+                if self.separate_calls % 2 == 0:
+                    vocals = vocals + _ODD_DC
+                stems = dict(stems)
+                stems["vocals"] = vocals
+                return mix, stems
+
+        sr = MODEL_SAMPLE_RATE
+        n = int(1.1 * sr)
+        wav = _sine(n, sr)
+        req = SeparateRequest(wav_44100_stereo=wav, model=DEFAULT_MODEL, device="cpu")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            manifest = _write_htdemucs_fixture(repo, th_payload=b"dc")
+            with (
+                patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
+                patch("perfectvoice_engine.separate._separator_cls", return_value=Disagreeing),
+                patch(
+                    "perfectvoice_engine.separate._to_model_input",
+                    side_effect=lambda arr: np.array(arr, dtype=np.float32, copy=True),
+                ),
+                patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
+                patch("perfectvoice_engine.separate.WINDOW_SECONDS", _TEST_WINDOW_S),
+                patch("perfectvoice_engine.separate.WINDOW_OVERLAP_SECONDS", _TEST_OVERLAP_S),
+            ):
+                result = separate_vocals(req, repo)
+        leftover = result.vocals - wav * _MOCK_GAIN
+        leftover_step = float(np.max(np.abs(np.diff(leftover, axis=-1))))
+        self.assertLess(leftover_step, _ODD_DC * 0.1)
+
+    def test_window_slice_is_copied_before_demucs(self) -> None:
+        FakeSeparator.instances.clear()
+
+        class Mutating(FakeSeparator):
+            def separate_tensor(self, wav: Any, sr: int | None = None) -> tuple[Any, dict[str, Any]]:
+                arr = np.asarray(wav)
+                arr *= 0.0
+                return super().separate_tensor(arr, sr)
+
+        sr = MODEL_SAMPLE_RATE
+        n = int(1.1 * sr)
+        wav = _sine(n, sr)
+        original = wav.copy()
+        req = SeparateRequest(wav_44100_stereo=wav, model=DEFAULT_MODEL, device="cpu")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            manifest = _write_htdemucs_fixture(repo, th_payload=b"alias")
+            with (
+                patch("perfectvoice_engine.models.load_manifest", return_value=manifest),
+                patch("perfectvoice_engine.separate._separator_cls", return_value=Mutating),
+                patch(
+                    "perfectvoice_engine.separate._to_model_input",
+                    side_effect=lambda arr: np.array(arr, dtype=np.float32, copy=True),
+                ),
+                patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
+                patch("perfectvoice_engine.separate.WINDOW_SECONDS", _TEST_WINDOW_S),
+                patch("perfectvoice_engine.separate.WINDOW_OVERLAP_SECONDS", _TEST_OVERLAP_S),
+            ):
+                separate_vocals(req, repo)
+        np.testing.assert_array_equal(wav, original)
+
+    def test_to_model_input_copies_parent_view(self) -> None:
+        wav = _sine(200)
+        view = wav[:, 20:80]
+        sentinel = float(view[0, 0])
+        with patch(
+            "perfectvoice_engine.separate.importlib.import_module",
+            side_effect=ImportError("no torch"),
+        ):
+            owned = _to_model_input(view)
+        np.asarray(owned)[:] = 0
+        self.assertAlmostEqual(float(view[0, 0]), sentinel)
+        self.assertGreater(float(np.max(np.abs(view))), 0.0)
 
     def test_cap_path_windows_without_allocating_2gib(self) -> None:
         FakeSeparator.instances.clear()
@@ -304,7 +456,7 @@ class SeparateWindowedTests(unittest.TestCase):
                 patch("perfectvoice_engine.separate._separator_cls", return_value=FakeSeparator),
                 patch(
                     "perfectvoice_engine.separate._to_model_input",
-                    side_effect=lambda arr: np.ascontiguousarray(arr, dtype=np.float32),
+                    side_effect=lambda arr: np.array(arr, dtype=np.float32, copy=True),
                 ),
                 patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
                 patch("perfectvoice_engine.separate.WINDOW_SECONDS", _TEST_WINDOW_S),

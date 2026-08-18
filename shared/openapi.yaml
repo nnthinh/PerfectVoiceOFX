@@ -194,7 +194,13 @@ components:
     Capabilities:
       type: object
       additionalProperties: false
-      required: [protocol_version, devices, models_ready]
+      required:
+        - protocol_version
+        - devices
+        - models_ready
+        - window_seconds
+        - window_overlap_seconds
+        - memory_cap_bytes
       properties:
         protocol_version:
           type: integer
@@ -209,6 +215,20 @@ components:
           additionalProperties:
             type: boolean
           description: Local files present (name → ready). No remote probe.
+        window_seconds:
+          type: number
+          exclusiveMinimum: 0
+          description: Long-form Demucs window length (10 min). OLA is outside Demucs.
+        window_overlap_seconds:
+          type: number
+          minimum: 0
+          description: Overlap between adjacent 10-min windows (1 s).
+        memory_cap_bytes:
+          type: integer
+          minimum: 1
+          description: |
+            n_samples * ch * 4 trip for the windowed path. Means "do not
+            hand Demucs the whole clip", not a process RSS limit.
 
     CreateJobRequest:
       type: object

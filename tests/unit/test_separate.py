@@ -59,6 +59,7 @@ FORBIDDEN_HOST_NEEDLES = (
 LOAD_PATHS = (
     ENGINE_DIR / "perfectvoice_engine" / "separate.py",
     ENGINE_DIR / "perfectvoice_engine" / "models.py",
+    ENGINE_DIR / "perfectvoice_engine" / "constants.py",
     ENGINE_DIR / "models" / "manifest.json",
 )
 
@@ -471,6 +472,7 @@ class StaticLoadContractTests(unittest.TestCase):
         for path in (
             ENGINE_DIR / "perfectvoice_engine" / "separate.py",
             ENGINE_DIR / "perfectvoice_engine" / "models.py",
+            ENGINE_DIR / "perfectvoice_engine" / "constants.py",
         ):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):

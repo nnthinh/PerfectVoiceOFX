@@ -32,6 +32,14 @@ from referencing import Registry, Resource
 
 from perfectvoice_engine import PROTOCOL_VERSION
 from perfectvoice_engine import __version__ as ENGINE_VERSION
+from perfectvoice_engine.constants import (
+    MEMORY_CAP_BYTES,
+    WINDOW_OVERLAP_SECONDS,
+    WINDOW_SECONDS,
+    JobCancelled,
+    pcm_nbytes,
+    raise_if_cancelled,
+)
 
 ALLOWED_BIND = "127.0.0.1"
 TOKEN_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -39,12 +47,6 @@ MAX_BODY = 16 * 1024 * 1024
 # Long enough that cancel tests win; I/O is not wired yet.
 STUB_HOLD_SECONDS = float(os.environ.get("PERFECTVOICE_STUB_HOLD", "2"))
 TERMINAL = frozenset({"done", "error", "cancelled"})
-# Keep in sync with perfectvoice_engine.separate — do not import that
-# module here (serve CI must not pull numpy / the infer stack).
-WINDOW_SECONDS = 600.0
-WINDOW_OVERLAP_SECONDS = 1.0
-MEMORY_CAP_BYTES = 2 * 1024 ** 3
-_FLOAT32_BYTES = 4
 JOB_PATH = re.compile(r"^/v1/jobs/([^/]+)$")
 JOB_CANCEL = re.compile(r"^/v1/jobs/([^/]+)/cancel$")
 JOB_EVENTS = re.compile(r"^/v1/jobs/([^/]+)/events$")
@@ -270,37 +272,15 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def pcm_nbytes(duration_s: float, sample_rate: int, channels: int) -> int:
-    """``duration * rate * ch * 4`` — the §3.4 low-memory trigger."""
-    return int(float(duration_s) * int(sample_rate) * int(channels) * _FLOAT32_BYTES)
-
-
 def needs_low_memory(
-    duration_s: float,
-    sample_rate: int,
+    n_samples: int,
     channels: int,
     *,
     cap: int | None = None,
 ) -> bool:
+    """Integer-sample form of the §3.4 cap (same ``pcm_nbytes`` as separate)."""
     limit = MEMORY_CAP_BYTES if cap is None else int(cap)
-    return pcm_nbytes(duration_s, sample_rate, channels) > limit
-
-
-class JobCancelledStub(RuntimeError):
-    """Local stand-in so serve does not import separate.JobCancelled."""
-
-
-def raise_if_cancelled(cancel_event: object | None) -> None:
-    """Same contract as separate.raise_if_cancelled (event or callback)."""
-    if cancel_event is None:
-        return
-    is_set = getattr(cancel_event, "is_set", None)
-    if callable(is_set):
-        if is_set():
-            raise JobCancelledStub("job cancelled")
-        return
-    if callable(cancel_event) and cancel_event():
-        raise JobCancelledStub("job cancelled")
+    return pcm_nbytes(n_samples, channels) > limit
 
 
 @dataclass
@@ -437,7 +417,7 @@ class JobStore:
             raise_if_cancelled(cancel_event)
             cancel_event.wait(timeout=STUB_HOLD_SECONDS)
             raise_if_cancelled(cancel_event)
-        except JobCancelledStub:
+        except JobCancelled:
             with self._lock:
                 if job.status in TERMINAL:
                     return

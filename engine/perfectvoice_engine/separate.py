@@ -19,6 +19,14 @@ from typing import Any, Callable, Iterator, Sequence
 
 import numpy as np
 
+from perfectvoice_engine.constants import (
+    MEMORY_CAP_BYTES,
+    WINDOW_OVERLAP_SECONDS,
+    WINDOW_SECONDS,
+    JobCancelled,
+    pcm_nbytes,
+    raise_if_cancelled,
+)
 from perfectvoice_engine.models import (
     DEFAULT_MODEL,
     VOCALS_ONLY_SIG,
@@ -35,15 +43,6 @@ CLIP_POLICY = "no_demucs_rescale"
 DEFAULT_SEGMENT = 7.8
 DEFAULT_OVERLAP = 0.25
 DEFAULT_SHIFTS = 1
-# Long-form windows sit *outside* Demucs (which already OLA-s 7.8 s segments).
-WINDOW_SECONDS = 600.0
-WINDOW_OVERLAP_SECONDS = 1.0
-MEMORY_CAP_BYTES = 2 * 1024 ** 3
-_FLOAT32_BYTES = 4
-
-
-class JobCancelled(RuntimeError):
-    pass
 
 
 @dataclass(frozen=True)
@@ -115,12 +114,14 @@ def _separator_cls() -> Any:
 
 
 def _to_model_input(arr: np.ndarray) -> Any:
-    contiguous = np.ascontiguousarray(arr, dtype=np.float32)
+    # Copy: wav[:, start:end] is a view. A future in-place normalize (or a
+    # mock that writes arr *= …) must not corrupt the next window's overlap.
+    owned = np.array(arr, dtype=np.float32, copy=True)
     try:
         torch = importlib.import_module("torch")
     except ImportError:
-        return contiguous
-    return torch.from_numpy(contiguous)
+        return owned
+    return torch.from_numpy(owned)
 
 
 def _to_numpy(value: Any) -> np.ndarray:
@@ -135,19 +136,6 @@ def _to_numpy(value: Any) -> np.ndarray:
     return np.asarray(value, dtype=np.float32)
 
 
-def raise_if_cancelled(cancel_event: object | None) -> None:
-    """Raise JobCancelled if an event is set or a callback returns true."""
-    if cancel_event is None:
-        return
-    is_set = getattr(cancel_event, "is_set", None)
-    if callable(is_set):
-        if is_set():
-            raise JobCancelled("job cancelled")
-        return
-    if callable(cancel_event) and cancel_event():
-        raise JobCancelled("job cancelled")
-
-
 def _cancel_callback(cancel_event: object | None) -> Callable[[dict[str, Any]], None] | None:
     if cancel_event is None:
         return None
@@ -158,17 +146,19 @@ def _cancel_callback(cancel_event: object | None) -> Callable[[dict[str, Any]], 
     return callback
 
 
-def pcm_nbytes(n_samples: int, channels: int, itemsize: int = _FLOAT32_BYTES) -> int:
-    return int(n_samples) * int(channels) * int(itemsize)
-
-
 def exceeds_memory_cap(
     n_samples: int,
     channels: int,
     *,
     cap: int | None = None,
 ) -> bool:
-    """True when duration * rate * ch * 4 would exceed the 2 GiB cap."""
+    """True when n_samples * ch * 4 would exceed the 2 GiB cap.
+
+    The cap means "do not hand Demucs the whole clip", not a process RSS
+    limit. Design §3.4 accepts loading the extract; dest is a second
+    full-length buffer. When a later I/O PR memmaps the extract, write
+    ``out`` the same way (or in 10-min dest chunks) so the trip bounds RAM.
+    """
     limit = MEMORY_CAP_BYTES if cap is None else int(cap)
     return pcm_nbytes(n_samples, channels) > limit
 
@@ -329,7 +319,14 @@ def _separate_windowed(
     window_s: float | None = None,
     overlap_s: float | None = None,
 ) -> np.ndarray:
-    """Run Demucs per 10-min window and OLA outside the model."""
+    """Run Demucs per 10-min window and OLA outside the model.
+
+    Incremental mix avoids retaining every *window* tensor. ``out`` is still
+    a full-length buffer — the cap is "do not hand Demucs the whole clip",
+    not an RSS ceiling (see ``exceeds_memory_cap``). Resume of finished
+    windows and remapping Demucs ``segment_offset`` / ``audio_length`` by
+    ``window_start`` are PR 07 (job cache + SSE). Cancel discards ``out``.
+    """
     n_samples = int(wav.shape[-1])
     channels = int(wav.shape[0])
     slices = window_slices(
@@ -338,7 +335,6 @@ def _separate_windowed(
     _window, overlap = window_hop_samples(
         MODEL_SAMPLE_RATE, window_s=window_s, overlap_s=overlap_s
     )
-    # Incremental mix: never keep every window tensor (cap / low-memory path).
     out = np.zeros((channels, n_samples), dtype=np.float32)
     last = len(slices) - 1
     for i, (start, end) in enumerate(slices):
