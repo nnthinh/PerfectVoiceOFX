@@ -20,8 +20,8 @@ jobs:
           python3 -m unittest tests/unit/test_schemas.py
       - name: Engine sidecar tests
         run: |
-          python3 -m pip install --user 'jsonschema>=4.18'
-          python3 -m unittest tests.unit.test_serve
+          python3 -m pip install --user 'jsonschema>=4.18' 'numpy>=1.24'
+          python3 -m unittest tests.unit.test_serve tests.unit.test_weight_fetch
       - name: Install ffmpeg for extract I/O tests
         run: brew install ffmpeg
       - name: Engine extract/resample/blend tests

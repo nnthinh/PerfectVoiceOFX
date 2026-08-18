@@ -92,6 +92,7 @@ class _RunningEngine:
         empty_repo.mkdir()
         env["PERFECTVOICE_DEMUCS_REPO"] = str(empty_repo)
         env["PERFECTVOICE_MANIFEST"] = str(ENGINE_DIR / "models" / "manifest.json")
+        self._repo = empty_repo
         cmd = [
             sys.executable,
             "-u",
@@ -453,6 +454,9 @@ class SidecarHttpTests(unittest.TestCase):
         self.assertEqual(body.get("protocol_version"), 1)
 
     def test_capabilities_and_no_model_download(self) -> None:
+        # Probing capabilities / jobs must not fetch. Download is user-click
+        # only (see tests.unit.test_weight_fetch); do not POST it here —
+        # the live sidecar would open official remotes.
         eng = self.start()
         status, body, _ = eng.request("GET", "/v1/capabilities")
         self.assertEqual(status, 200)
@@ -460,12 +464,13 @@ class SidecarHttpTests(unittest.TestCase):
         self.assertEqual(body.get("protocol_version"), 1)
         self.assertIn("devices", body)
         self.assertIn("models_ready", body)
-        self.assertFalse(body["models_ready"])
+        self.assertEqual(
+            body["models_ready"],
+            {"htdemucs": False, "htdemucs_ft": False},
+        )
         self.assertEqual(body.get("window_seconds"), 600.0)
         self.assertEqual(body.get("window_overlap_seconds"), 1.0)
         self.assertEqual(body.get("memory_cap_bytes"), MEMORY_CAP_BYTES)
-        status, body, _ = eng.request("POST", "/v1/models/download", body={"name": "htdemucs"})
-        self.assertEqual(status, 404)
 
     def test_serve_does_not_import_ml(self) -> None:
         self.assertNotIn("demucs", sys.modules)
