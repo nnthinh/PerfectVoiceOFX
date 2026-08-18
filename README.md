@@ -46,7 +46,7 @@ Logic engine, panel JS, và download script **chưa** có — chỉ placeholder.
 docs/design.md                 # design (rev 4)
 docs/licenses/                 # Demucs MIT + weights disclaimer
 host/com.perfectvoice.panel/   # Workflow Integration (trống)
-engine/perfectvoice_engine/    # package marker
+engine/perfectvoice_engine/    # localhost sidecar (`perfectvoice-engine serve`)
 engine/models/                 # không commit weights
 shared/schema/                 # clip / params / job / hash-fields JSON Schema v1
 shared/openapi.yaml            # localhost HTTP sketch (no /v1/models/download yet)
@@ -63,7 +63,7 @@ tests/golden/
 
 ```
 python3 -m pip install -r requirements-dev.txt
-python3 -m unittest tests/unit/test_schemas.py
+python3 -m unittest tests.unit.test_schemas tests.unit.test_serve
 ```
 
 ## License

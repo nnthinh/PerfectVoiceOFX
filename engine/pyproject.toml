@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perfectvoice-engine"
+version = "0.1.0"
+description = "PerfectVoice localhost sidecar engine (HTTP skeleton, no ML)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "PerfectVoice contributors" }]
+# Ship target is CPython 3.12; 3.10 is the development floor.
+dependencies = [
+    "jsonschema>=4.18",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.scripts]
+perfectvoice-engine = "perfectvoice_engine.serve:main"
+
+[tool.setuptools.packages.find]
+include = ["perfectvoice_engine*"]
