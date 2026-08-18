@@ -1,0 +1,12 @@
+PerfectVoice for DaVinci Resolve Studio
+
+This package installs into your user Library (no admin, not /Library):
+
+  Engine: ~/Library/Application Support/PerfectVoice/engine/perfectvoice-engine
+  Panel:  ~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/com.perfectvoice.panel/
+
+Requires DaVinci Resolve Studio standalone (not the Mac App Store) on Apple Silicon (macOS 13+).
+
+This build ships hello-engine — a small Mach-O that implements the panel spawn / health contract. The production sidecar is a PyInstaller onedir and will replace the stub later. No user Python or conda is required.
+
+Official Demucs model weights are NOT included. Use Download model in the panel after install.

@@ -38,3 +38,7 @@ jobs:
         run: node --test host/com.perfectvoice.panel/resolve/*.test.js host/com.perfectvoice.panel/engine.test.js
       - name: Windows installer policy (paths, no weights, same IPC)
         run: bash installer/windows/check-policy.sh
+      - name: macOS pkg dry-run (unsigned, no weights, no user Python)
+        run: bash installer/macos/build-pkg.sh --dry-run
+      - name: macOS pkg policy (no /Library, no weights, no user Python)
+        run: bash installer/macos/check-policy.sh

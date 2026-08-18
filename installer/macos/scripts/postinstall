@@ -1,0 +1,60 @@
+#!/bin/bash
+# Finalize a *user-space* install. Never write the panel or engine to /Library.
+# $2 is the Installer destination (user home when currentUserHome is used).
+# System dest → exit 2 immediately (do not remap to ~user).
+set -euo pipefail
+
+NODE_SRC="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Workflow Integrations/Examples/SamplePlugin/WorkflowIntegration.node"
+
+is_system_dest() {
+  local d="${1:-}"
+  [ -z "$d" ] && return 0
+  [ "$d" = "/" ] && return 0
+  if [ "$d" = "/Library" ] || [[ "$d" == /Library/* ]]; then
+    return 0
+  fi
+  if [ "$d" = "/Applications" ] || [[ "$d" == /Applications/* ]]; then
+    return 0
+  fi
+  if [ "$d" = "/var" ] || [[ "$d" == /var/* ]]; then
+    return 0
+  fi
+  if [ "$d" = "/private/var" ] || [[ "$d" == /private/var/* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+dest="${2:-}"
+if is_system_dest "$dest"; then
+  echo "postinstall: refusing system destination ${dest:-<empty>}" >&2
+  echo "Supported CLI: installer -pkg … -target CurrentUserHomeDirectory" >&2
+  exit 2
+fi
+
+# dest is the user home from CurrentUserHomeDirectory. Do not eval ~user.
+HOME_DIR="$dest"
+ENGINE="$HOME_DIR/Library/Application Support/PerfectVoice/engine/perfectvoice-engine"
+PANEL="$HOME_DIR/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/com.perfectvoice.panel"
+
+if [ -f "$ENGINE" ]; then
+  chmod 755 "$ENGINE" || true
+fi
+
+if [ -f "$NODE_SRC" ]; then
+  mkdir -p "$PANEL"
+  cp "$NODE_SRC" "$PANEL/WorkflowIntegration.node"
+  echo "copied WorkflowIntegration.node from Resolve Developer examples"
+else
+  echo "WARNING: WorkflowIntegration.node not found at $NODE_SRC"
+  echo "Panel will try the Resolve Developer path at runtime."
+fi
+
+echo "PerfectVoice installed (user-space):"
+echo "  engine: $ENGINE"
+echo "  panel:  $PANEL"
+echo "Restart DaVinci Resolve Studio → Workspace → Workflow Integrations → PerfectVoice."
+echo "This pkg ships hello-engine (spawn contract). Production engine is a PyInstaller onedir later."
+echo "Demucs/DFN weights are not included. Use Download model in the panel."
+
+exit 0

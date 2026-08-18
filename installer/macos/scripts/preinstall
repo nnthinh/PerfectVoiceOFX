@@ -1,0 +1,36 @@
+#!/bin/bash
+# Fail closed *before* the payload is extracted.
+# install-location="/" + Library/… would otherwise become /Library/… when
+# the volume target is / (sudo installer -pkg … -target /).
+set -euo pipefail
+
+dest="${2:-}"
+
+is_system_dest() {
+  local d="${1:-}"
+  [ -z "$d" ] && return 0
+  [ "$d" = "/" ] && return 0
+  if [ "$d" = "/Library" ] || [[ "$d" == /Library/* ]]; then
+    return 0
+  fi
+  if [ "$d" = "/Applications" ] || [[ "$d" == /Applications/* ]]; then
+    return 0
+  fi
+  if [ "$d" = "/var" ] || [[ "$d" == /var/* ]]; then
+    return 0
+  fi
+  if [ "$d" = "/private/var" ] || [[ "$d" == /private/var/* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+if is_system_dest "$dest"; then
+  echo "preinstall: refusing system destination ${dest:-<empty>}" >&2
+  echo "PerfectVoice is user-space only. Do not use sudo installer -target /." >&2
+  echo "Supported CLI: installer -pkg PerfectVoice-0.1.0-arm64.pkg -target CurrentUserHomeDirectory" >&2
+  echo "Or: bash installer/macos/install-user.sh  (no sudo)" >&2
+  exit 2
+fi
+
+exit 0
