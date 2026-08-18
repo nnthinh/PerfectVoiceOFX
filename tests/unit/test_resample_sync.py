@@ -32,6 +32,7 @@ from perfectvoice_engine.ffmpeg_io import (  # noqa: E402
     ffmpeg_bin,
     inspect_wav,
     probe_audio,
+    reject_if_multichannel,
     round_half_up,
 )
 from perfectvoice_engine.resample import (  # noqa: E402
@@ -154,8 +155,14 @@ class ExtractHandlesTests(unittest.TestCase):
             self.assertEqual(inspect_wav(dest).originator, BWF_ORIGINATOR)
 
 
-@unittest.skipUnless(_have_ffmpeg(), "ffmpeg not installed")
 class RejectMultichannelTests(unittest.TestCase):
+    def test_reject_if_multichannel_without_ffmpeg(self) -> None:
+        with self.assertRaises(UnsupportedChannelLayout):
+            reject_if_multichannel(6)
+        reject_if_multichannel(1)
+        reject_if_multichannel(2)
+
+    @unittest.skipUnless(_have_ffmpeg(), "ffmpeg not installed")
     def test_six_channel_source_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "sixch.wav"
