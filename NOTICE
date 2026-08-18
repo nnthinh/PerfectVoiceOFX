@@ -12,10 +12,13 @@ Demucs (source code)
 --------------------
 
 Demucs (https://github.com/adefossez/demucs, formerly
-facebookresearch/demucs) is MIT-licensed. Copyright (c) Meta Platforms,
-Inc. and affiliates / Alexandre Défossez and contributors.
+facebookresearch/demucs) is MIT-licensed. The upstream LICENSE
+copyright line is: Copyright (c) Meta Platforms, Inc. and affiliates.
+Originally published by Facebook Research; Alexandre Défossez is the
+original author and maintains the current fork.
 
-The MIT grant covers the Demucs *source code* only.
+The MIT grant covers the Demucs *source code* only. See
+docs/licenses/demucs-MIT.txt.
 
 
 Demucs (pretrained weights) — not MIT

@@ -1,16 +1,11 @@
-Demucs source code — MIT License
-================================
-
-The Demucs *source code* (PyPI `demucs`, https://github.com/adefossez/demucs,
-formerly https://github.com/facebookresearch/demucs) is licensed as follows.
-This grant does **not** cover official pretrained weights. See
-demucs-weights-disclaimer.md and the root NOTICE.
+The following is the Demucs *source-code* LICENSE, copied verbatim from
+https://github.com/adefossez/demucs/blob/main/LICENSE (same text on
+facebookresearch/demucs). It does not cover official pretrained weights.
+See demucs-weights-disclaimer.md and the root NOTICE.
 
 MIT License
 
-Copyright (c) Facebook, Inc. and its affiliates.
 Copyright (c) Meta Platforms, Inc. and affiliates.
-Copyright (c) Alexandre Défossez and contributors.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
