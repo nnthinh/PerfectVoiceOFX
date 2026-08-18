@@ -42,6 +42,10 @@ const UNCONFIRMED = {
 };
 
 function isEnabledFlag(value) {
+    if (value && typeof value === "object") {
+        const inner = value.isEnabled != null ? value.isEnabled : value.enabled;
+        return isEnabledFlag(inner);
+    }
     if (value === true || value === 1 || value === "1") return true;
     if (typeof value === "string" && value.toLowerCase() === "true") return true;
     return false;

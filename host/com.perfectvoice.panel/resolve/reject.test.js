@@ -9,7 +9,14 @@ const {
     COPY,
 } = require("./reject");
 const { inspectSelection } = require("./inspect");
-const { computePlace, writeSilenceWav, readWavStats, wavCoversPlace, pickPlaceClip } = require("./place");
+const {
+    computePlace,
+    writeSilenceWav,
+    readWavStats,
+    wavCoversPlace,
+    pickPlaceClip,
+    appendSucceeded,
+} = require("./place");
 const { FPS_24, placeFrames } = require("./time");
 const fs = require("fs");
 const os = require("os");
@@ -102,6 +109,25 @@ describe("evaluateReject", () => {
             { outFps: FPS24 },
         );
         assert.ok(v.reasons.some((r) => r.code === "reverse"));
+    });
+
+    it("rejects reverse/EW when the dump value is a VI-shaped object", () => {
+        const rev = evaluateReject(
+            baseClip({ itemPropertySnapshot: { Reverse: { isEnabled: true, amount: 1 } } }),
+            { outFps: FPS24 },
+        );
+        assert.ok(rev.reasons.some((r) => r.code === "reverse"));
+        const ew = evaluateReject(
+            baseClip({ itemPropertySnapshot: { ElasticWave: { enabled: true } } }),
+            { outFps: FPS24 },
+        );
+        assert.ok(ew.reasons.some((r) => r.code === "elastic_wave"));
+        const off = evaluateReject(
+            baseClip({ itemPropertySnapshot: { Reverse: { isEnabled: false } } }),
+            { outFps: FPS24 },
+        );
+        assert.equal(off.reasons.some((r) => r.code === "reverse"), false);
+        assert.equal(off.warnings.some((w) => w.code === "reverse_unconfirmed"), false);
     });
 
     it("rejects slip from linked_audio.offset", () => {
@@ -227,6 +253,73 @@ describe("place compute", () => {
         assert.equal(place.handleEndFrame, 28);
         const infoStart = placeFrames(0.2, 1.2, 10, FPS_24, 0.5, 0.2);
         assert.equal(place.handleStartFrame, infoStart.handleStartFrame);
+    });
+
+    it("prefers engine handles_left_actual over default H", () => {
+        const { place, hLeft } = computePlace({
+            t0: 1.0,
+            t1: 2.0,
+            fileDur: 10,
+            handleS: 0.5,
+            handles_left_actual: 0.25,
+            outFps: FPS_24,
+        });
+        assert.equal(hLeft, 0.25);
+        assert.equal(place.handleStartFrame, 6);
+        const naive = computePlace({
+            t0: 1.0,
+            t1: 2.0,
+            fileDur: 10,
+            handleS: 0.5,
+            outFps: FPS_24,
+        });
+        assert.equal(naive.hLeft, 0.5);
+        assert.equal(naive.place.handleStartFrame, 12);
+    });
+
+    it("walks RIFF chunks so BWF extra data does not break duration", () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pv-bwf-"));
+        const wav = path.join(dir, "bwf.wav");
+        const nFrames = 81600;
+        const channels = 2;
+        const sampleRate = 48000;
+        const dataSize = nFrames * channels * 2;
+        const junk = Buffer.alloc(64, 0x42);
+        const riffSize = 4 + (8 + 16) + (8 + junk.length) + (8 + dataSize);
+        const buf = Buffer.alloc(8 + riffSize);
+        let o = 0;
+        buf.write("RIFF", o); o += 4;
+        buf.writeUInt32LE(riffSize, o); o += 4;
+        buf.write("WAVE", o); o += 4;
+        buf.write("fmt ", o); o += 4;
+        buf.writeUInt32LE(16, o); o += 4;
+        buf.writeUInt16LE(1, o); o += 2;
+        buf.writeUInt16LE(channels, o); o += 2;
+        buf.writeUInt32LE(sampleRate, o); o += 4;
+        buf.writeUInt32LE(sampleRate * channels * 2, o); o += 4;
+        buf.writeUInt16LE(channels * 2, o); o += 2;
+        buf.writeUInt16LE(16, o); o += 2;
+        buf.write("bext", o); o += 4;
+        buf.writeUInt32LE(junk.length, o); o += 4;
+        junk.copy(buf, o); o += junk.length;
+        buf.write("data", o); o += 4;
+        buf.writeUInt32LE(dataSize, o);
+        fs.writeFileSync(wav, buf);
+        const stats = readWavStats(wav);
+        assert.equal(stats.canonical, true);
+        assert.equal(stats.nFrames, nFrames);
+        assert.equal(stats.sampleRate, sampleRate);
+        const place = placeFrames(0.2, 1.2, 10, FPS_24, 0.5);
+        assert.equal(wavCoversPlace(stats, place, { num: 24, den: 1 }).ok, true);
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("treats an empty AppendToTimeline list as failure", () => {
+        assert.equal(appendSucceeded([]), false);
+        assert.equal(appendSucceeded(false), false);
+        assert.equal(appendSucceeded(null), false);
+        assert.equal(appendSucceeded([{ name: "clip" }]), true);
+        assert.equal(appendSucceeded(true), true);
     });
 
     it("writes a WAV that covers the place window", () => {

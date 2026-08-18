@@ -74,16 +74,31 @@ function dedupeLinkedGroup(members) {
     return [row(chosen, false, false, null)];
 }
 
+const identityKeys = new WeakMap();
+let nextIdentity = 1;
+
+function objectIdentityKey(item) {
+    if (item && (typeof item === "object" || typeof item === "function")) {
+        let key = identityKeys.get(item);
+        if (!key) {
+            key = `obj:${nextIdentity}`;
+            nextIdentity += 1;
+            identityKeys.set(item, key);
+        }
+        return key;
+    }
+    return String(item);
+}
+
 function itemKey(item, callFn) {
     if (item && item.uniqueId) return String(item.uniqueId);
     if (item && item.unique_id) return String(item.unique_id);
     if (typeof callFn === "function") {
         const uid = callFn(item, "GetUniqueId");
         if (typeof uid === "string" && uid) return uid;
-        const name = callFn(item, "GetName");
-        if (typeof name === "string" && name) return `name:${name}`;
+        // Do not fall back to GetName — linked A/V often share a name.
     }
-    return String(item);
+    return objectIdentityKey(item);
 }
 
 function groupAndDedupe(items, memberOf) {

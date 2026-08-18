@@ -53,22 +53,52 @@ function writeSilenceWav(filePath, sampleRate, nFrames, channels = 2) {
 }
 
 function readWavStats(filePath) {
-    const fd = fs.openSync(filePath, "r");
-    const header = Buffer.alloc(44);
-    const n = fs.readSync(fd, header, 0, 44, 0);
-    fs.closeSync(fd);
-    if (n < 44 || header.toString("ascii", 0, 4) !== "RIFF" || header.toString("ascii", 8, 12) !== "WAVE") {
+    const buf = fs.readFileSync(filePath);
+    if (buf.length < 12 || buf.toString("ascii", 0, 4) !== "RIFF" || buf.toString("ascii", 8, 12) !== "WAVE") {
         throw new Error(`not a RIFF/WAVE file: ${filePath}`);
     }
-    const channels = header.readUInt16LE(22);
-    const sampleRate = header.readUInt32LE(24);
-    const bits = header.readUInt16LE(34);
-    const dataSize = header.readUInt32LE(40);
-    const bytesPerSample = bits / 8;
-    const nFrames =
-        channels && bytesPerSample ? Math.floor(dataSize / (channels * bytesPerSample)) : 0;
-    const durationS = sampleRate ? nFrames / sampleRate : 0;
-    return { path: filePath, sampleRate, nFrames, channels, bits, durationS };
+    let offset = 12;
+    let fmt = null;
+    let dataSize = null;
+    while (offset + 8 <= buf.length) {
+        const id = buf.toString("ascii", offset, offset + 4);
+        const size = buf.readUInt32LE(offset + 4);
+        const start = offset + 8;
+        if (id === "fmt " && size >= 16 && start + 16 <= buf.length) {
+            fmt = {
+                channels: buf.readUInt16LE(start + 2),
+                sampleRate: buf.readUInt32LE(start + 4),
+                bits: buf.readUInt16LE(start + 14),
+            };
+        } else if (id === "data") {
+            dataSize = size;
+            if (fmt) break;
+        }
+        offset = start + size + (size % 2);
+    }
+    if (!fmt || dataSize == null || !(fmt.channels > 0) || !(fmt.bits > 0) || !(fmt.sampleRate > 0)) {
+        return {
+            path: filePath,
+            sampleRate: fmt && fmt.sampleRate,
+            nFrames: null,
+            channels: fmt && fmt.channels,
+            bits: fmt && fmt.bits,
+            durationS: null,
+            canonical: false,
+        };
+    }
+    const bytesPerSample = fmt.bits / 8;
+    const nFrames = Math.floor(dataSize / (fmt.channels * bytesPerSample));
+    const durationS = nFrames / fmt.sampleRate;
+    return {
+        path: filePath,
+        sampleRate: fmt.sampleRate,
+        nFrames,
+        channels: fmt.channels,
+        bits: fmt.bits,
+        durationS,
+        canonical: true,
+    };
 }
 
 function wavCoversPlace(stats, place, fps) {
@@ -152,6 +182,20 @@ function resolveOutFps(resolve, params) {
     return { fps: asFps([24, 1]), source: "default_24/1" };
 }
 
+function appendSucceeded(placed) {
+    if (Array.isArray(placed)) return placed.length > 0;
+    return Boolean(placed);
+}
+
+function pickHandlesLeftActual(params) {
+    // Engine job result field is handles_left_actual (Appendix A). Place must
+    // use that, not default H, or startFrame drifts when t0 > requested H.
+    if (!params) return null;
+    if (params.handles_left_actual != null) return Number(params.handles_left_actual);
+    if (params.handlesLeftActual != null) return Number(params.handlesLeftActual);
+    return null;
+}
+
 function computePlace(params) {
     const t0 = Number(params.t0);
     const t1 = Number(params.t1);
@@ -160,9 +204,10 @@ function computePlace(params) {
     }
     const handleS = params.handleS != null ? Number(params.handleS) : DEFAULT_HANDLE_S;
     const fileDur = params.fileDur != null ? Number(params.fileDur) : t1 + 1e6;
+    const fromEngine = pickHandlesLeftActual(params);
     const hLeft =
-        params.handlesLeftActual != null
-            ? Number(params.handlesLeftActual)
+        fromEngine != null && Number.isFinite(fromEngine)
+            ? fromEngine
             : actualHandles(t0, t1, fileDur, handleS).hLeftActual;
     const fps = asFps(params.outFps);
     const place = placeFrames(t0, t1, fileDur, fps, handleS, hLeft);
@@ -206,12 +251,14 @@ function placeIsolated(resolve, params) {
         stats = null;
         computed.wavStatError = err && err.message ? err.message : String(err);
     }
-    if (stats) {
+    if (stats && stats.canonical && Number.isFinite(stats.durationS)) {
         const cover = wavCoversPlace(stats, computed.place, computed.fps);
         if (!cover.ok) {
             return { ok: false, error: cover.note, wav: stats, place: computed.place };
         }
         computed.coverNote = cover.note;
+    } else if (stats && !stats.canonical) {
+        computed.coverNote = "WAV data chunk was not found; skipped cover check";
     }
 
     const pm = callValue(resolve, "GetProjectManager");
@@ -246,8 +293,10 @@ function placeIsolated(resolve, params) {
         2,
     );
     const placed = callValue(mediaPool, "AppendToTimeline", [clipInfo]);
+    const ok = appendSucceeded(placed);
+    const placedCount = Array.isArray(placed) ? placed.length : placed ? 1 : 0;
     return {
-        ok: Boolean(placed),
+        ok,
         trackIndex,
         trackName: p.trackName || ISOLATED_TRACK,
         recordFrame: Number(p.recordFrame),
@@ -262,7 +311,7 @@ function placeIsolated(resolve, params) {
         handlesLeftActual: computed.hLeft,
         wav: stats || { path: p.wavPath },
         coverNote: computed.coverNote || null,
-        placedCount: Array.isArray(placed) ? placed.length : placed ? 1 : 0,
+        placedCount,
     };
 }
 
@@ -336,6 +385,8 @@ module.exports = {
     ensureIsolatedTrack,
     ensureBin,
     computePlace,
+    pickHandlesLeftActual,
+    appendSucceeded,
     placeIsolated,
     placeTestWav,
     pickPlaceClip,

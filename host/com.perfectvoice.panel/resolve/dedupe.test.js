@@ -2,7 +2,7 @@
 
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { dedupeLinkedGroup, groupAndDedupe } = require("./dedupe");
+const { dedupeLinkedGroup, groupAndDedupe, itemKey } = require("./dedupe");
 const { collectSelected, groupSelectedItems } = require("./selection");
 const fs = require("fs");
 const path = require("path");
@@ -153,6 +153,33 @@ describe("collectSelected", () => {
         const rows = groupSelectedItems(got.items);
         assert.equal(rows.filter((r) => !r.suppressedDuplicate).length, 1);
         assert.equal(rows[0].filePath, "/a.wav");
+    });
+
+    it("keeps the audio sibling when linked items share a name and have no UniqueId", () => {
+        const audio = fakeItem({ name: "A001", trackType: "audio", mp: fakeMp("/a.wav") });
+        const video = fakeItem({
+            name: "A001",
+            trackType: "video",
+            linked: [audio],
+            mp: fakeMp("/v.mov"),
+        });
+        delete audio.GetUniqueId;
+        delete video.GetUniqueId;
+        const rows = groupSelectedItems([video, audio]);
+        const jobs = rows.filter((r) => !r.suppressedDuplicate);
+        assert.equal(jobs.length, 1);
+        assert.equal(jobs[0].filePath, "/a.wav");
+        assert.equal(jobs[0].preferredAudioSibling, true);
+    });
+
+    it("uses object identity, not clip name, when UniqueId is missing", () => {
+        const callFn = (it, name) => (typeof it[name] === "function" ? it[name]() : undefined);
+        const video = { GetName: () => "A001" };
+        const audio = { GetName: () => "A001" };
+        assert.notEqual(itemKey(video, callFn), itemKey(audio, callFn));
+        assert.equal(itemKey(video, callFn), itemKey(video, callFn));
+        const withId = { GetUniqueId: () => "uid-1", GetName: () => "A001" };
+        assert.equal(itemKey(withId, callFn), "uid-1");
     });
 
     it("never calls GetItemListInTrack", () => {
