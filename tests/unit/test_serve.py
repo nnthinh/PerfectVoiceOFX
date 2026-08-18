@@ -81,6 +81,9 @@ class _RunningEngine:
         env["PYTHONPATH"] = str(ENGINE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
         env["PYTHONUNBUFFERED"] = "1"
         env["PERFECTVOICE_STUB_HOLD"] = hold
+        # Isolate models_ready from the developer's real local_repo.
+        self._repo = Path(tempfile.mkdtemp(prefix="pv-repo-"))
+        env["PERFECTVOICE_DEMUCS_REPO"] = str(self._repo)
         cmd = [
             sys.executable,
             "-u",
@@ -429,7 +432,10 @@ class SidecarHttpTests(unittest.TestCase):
         self.assertEqual(body.get("protocol_version"), 1)
         self.assertIn("devices", body)
         self.assertIn("models_ready", body)
-        self.assertFalse(body["models_ready"])
+        self.assertEqual(
+            body["models_ready"],
+            {"htdemucs": False, "htdemucs_ft": False},
+        )
 
     def test_serve_does_not_import_ml(self) -> None:
         self.assertNotIn("demucs", sys.modules)

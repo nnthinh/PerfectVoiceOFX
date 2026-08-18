@@ -32,7 +32,7 @@ from referencing import Registry, Resource
 
 from perfectvoice_engine import PROTOCOL_VERSION
 from perfectvoice_engine import __version__ as ENGINE_VERSION
-from perfectvoice_engine.models import ALLOWED_MODELS, default_local_repo
+from perfectvoice_engine.models import ALLOWED_MODELS, default_local_repo, models_ready
 from perfectvoice_engine.weight_fetch import WeightFetchError, download_model
 
 ALLOWED_BIND = "127.0.0.1"
@@ -493,7 +493,7 @@ class EngineHandler(BaseHTTPRequestHandler):
                 {
                     "protocol_version": PROTOCOL_VERSION,
                     "devices": ["cpu"],
-                    "models_ready": {},
+                    "models_ready": models_ready(self.server.local_repo),
                 },
             )
             return
@@ -571,6 +571,7 @@ class EngineHandler(BaseHTTPRequestHandler):
 
         def progress(filename: str, done: int, total: int) -> None:
             nonlocal started_sse
+            self.server.last_request = time.monotonic()
             if not want_sse:
                 return
             if not started_sse:
@@ -600,7 +601,7 @@ class EngineHandler(BaseHTTPRequestHandler):
                 return
             self._json(400, {"error": "validation_error", "detail": str(exc)})
             return
-        except WeightFetchError as exc:
+        except (WeightFetchError, OSError) as exc:
             if started_sse:
                 self._write_sse({"event": "error", "data": {"message": str(exc)}})
                 return
@@ -753,6 +754,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def idle_watchdog(httpd: EngineHTTPServer, stop: threading.Event) -> None:
     while not stop.wait(1.0):
         if httpd.idle_seconds <= 0:
+            continue
+        if httpd.download_lock.locked():
             continue
         if time.monotonic() - httpd.last_request > httpd.idle_seconds:
             log("idle timeout, exiting")

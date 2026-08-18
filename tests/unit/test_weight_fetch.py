@@ -16,10 +16,12 @@ import tempfile
 import threading
 import unittest
 import urllib.error
+import urllib.request
 from email.message import Message
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import urljoin
 
 import numpy as np
 
@@ -37,13 +39,17 @@ from perfectvoice_engine.models import (  # noqa: E402
     sha256_file,
 )
 from perfectvoice_engine.separate import SeparateRequest, separate_vocals  # noqa: E402
+from perfectvoice_engine import serve as serve_mod  # noqa: E402
 from perfectvoice_engine.serve import EngineHTTPServer, JobStore  # noqa: E402
 from perfectvoice_engine.weight_fetch import (  # noqa: E402
     ALLOWED_URL_PREFIXES,
     FB_HYBRID,
+    HF_CACHE_HTDEMUCS,
+    HF_CACHE_HTDEMUCS_FT,
     HF_HTDEMUCS,
     ChecksumMismatch,
     HostNotAllowed,
+    _AllowlistRedirectHandler,
     assert_url_allowed,
     candidate_urls,
     download_model,
@@ -108,6 +114,8 @@ class AllowlistTests(unittest.TestCase):
             (
                 "https://huggingface.co/adefossez/HTDemucs",
                 "https://huggingface.co/adefossez/HTDemucs-ft",
+                "https://huggingface.co/api/resolve-cache/models/adefossez/HTDemucs",
+                "https://huggingface.co/api/resolve-cache/models/adefossez/HTDemucs-ft",
                 "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/",
             ),
         )
@@ -117,6 +125,7 @@ class AllowlistTests(unittest.TestCase):
             "https://evil.example/htdemucs.yaml",
             "http://huggingface.co/adefossez/HTDemucs/resolve/main/x",
             "https://huggingface.co/adefossez/other/resolve/main/x",
+            "https://huggingface.co/api/resolve-cache/models/adefossez/other/x",
             "https://dl.fbaipublicfiles.com/demucs/mdx_final/x.th",
             f"{HF_HTDEMUCS}/resolve/main/../secret",
         ):
@@ -130,6 +139,55 @@ class AllowlistTests(unittest.TestCase):
         self.assertTrue(any(u.startswith(FB_HYBRID) for u in urls))
         for url in urls:
             assert_url_allowed(url)
+
+    def test_hub_resolve_cache_307_is_allowed(self) -> None:
+        # Live Hub 307s /resolve/main/* to this same-host path. Do not mock
+        # the handler — this is the hop that used to raise HostNotAllowed.
+        start = f"{HF_HTDEMUCS}/resolve/main/htdemucs.yaml"
+        relative = "/api/resolve-cache/models/adefossez/HTDemucs/deadbeef/htdemucs.yaml"
+        joined = urljoin(start, relative)
+        self.assertTrue(joined.startswith(HF_CACHE_HTDEMUCS + "/"))
+        assert_url_allowed(joined)
+        handler = _AllowlistRedirectHandler()
+        nxt = handler.redirect_request(
+            urllib.request.Request(start),
+            fp=None,
+            code=307,
+            msg="Temporary Redirect",
+            headers=Message(),
+            newurl=joined,
+        )
+        self.assertIsNotNone(nxt)
+        assert nxt is not None
+        self.assertEqual(nxt.full_url, joined)
+        ft = urljoin(
+            "https://huggingface.co/adefossez/HTDemucs-ft/resolve/main/htdemucs_ft.yaml",
+            "/api/resolve-cache/models/adefossez/HTDemucs-ft/cafebabe/htdemucs_ft.yaml",
+        )
+        self.assertTrue(ft.startswith(HF_CACHE_HTDEMUCS_FT + "/"))
+        assert_url_allowed(ft)
+
+    def test_redirect_to_evil_is_rejected(self) -> None:
+        handler = _AllowlistRedirectHandler()
+        start = f"{HF_HTDEMUCS}/resolve/main/htdemucs.yaml"
+        with self.assertRaises(HostNotAllowed):
+            handler.redirect_request(
+                urllib.request.Request(start),
+                fp=None,
+                code=307,
+                msg="Temporary Redirect",
+                headers=Message(),
+                newurl="https://evil.example/htdemucs.yaml",
+            )
+
+    def test_dotdot_filename_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                download_model(
+                    DEFAULT_MODEL,
+                    Path(tmp),
+                    manifest={DEFAULT_MODEL: {"..": "0" * 64}},
+                )
 
 
 class NoClickZeroRequestTests(unittest.TestCase):
@@ -381,9 +439,14 @@ class DownloadEndpointTests(unittest.TestCase):
             _mock_urlopen(payloads, hits),
         ):
             status, body = self._request("POST", "/v1/jobs", job)
-        self.assertEqual(status, 202)
-        assert isinstance(body, dict)
-        self.assertEqual(body.get("status"), "queued")
+            self.assertEqual(status, 202)
+            assert isinstance(body, dict)
+            self.assertEqual(body.get("status"), "queued")
+            with patch.object(serve_mod, "STUB_HOLD_SECONDS", 0):
+                self.store._run_stub(str(body["id"]))
+        job_row = self.store.get(str(body["id"]))
+        assert job_row is not None
+        self.assertEqual(job_row.status, "error")
         self.assertEqual(hits, [])
         self.assertEqual(list(self.tmp.glob("*.th")), [])
 
@@ -392,6 +455,26 @@ class DownloadEndpointTests(unittest.TestCase):
         self.assertEqual(status, 400)
         assert isinstance(body, dict)
         self.assertEqual(body.get("error"), "validation_error")
+
+    def test_fetch_error_is_502_and_does_not_publish(self) -> None:
+        payloads = _htdemucs_payloads()
+        manifest = _htdemucs_manifest(payloads)
+        man = self.tmp / "manifest.json"
+        man.write_text(json.dumps(manifest), encoding="utf-8")
+
+        def boom(url: str, timeout: float | None = None) -> FakeResponse:
+            raise urllib.error.URLError("mocked down")
+
+        with (
+            patch.dict(os.environ, {"PERFECTVOICE_MANIFEST": str(man)}),
+            patch("perfectvoice_engine.weight_fetch._urlopen", boom),
+        ):
+            status, body = self._request("POST", "/v1/models/download", {"name": DEFAULT_MODEL})
+        self.assertEqual(status, 502)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("error"), "download_failed")
+        self.assertFalse((self.tmp / "955717e8-8726e21a.th").exists())
+        self.assertFalse((self.tmp / "htdemucs.yaml").exists())
 
     def test_sse_progress_on_accept(self) -> None:
         payloads = _htdemucs_payloads()
@@ -454,6 +537,7 @@ class CliTests(unittest.TestCase):
         text = (REPO_ROOT / "scripts" / "download_demucs.py").read_text(encoding="utf-8")
         self.assertIn("https://huggingface.co/adefossez/HTDemucs", text)
         self.assertIn("https://huggingface.co/adefossez/HTDemucs-ft", text)
+        self.assertIn("https://huggingface.co/api/resolve-cache/models/adefossez/HTDemucs", text)
         self.assertIn("https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/", text)
 
 

@@ -3,7 +3,7 @@ info:
   title: PerfectVoice engine sidecar
   version: 0.1.0
   description: |
-    Localhost HTTP sketch (no implementation in this PR).
+    Localhost sidecar HTTP.
 
     Bind **127.0.0.1 only**. Auth is `Authorization: Bearer <token>` from a
     0600 one-shot token file (or stdin). `protocol_version` is an integer:

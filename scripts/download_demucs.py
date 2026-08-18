@@ -7,6 +7,8 @@ after sha256 verify.
 Allowlist (same as ``weight_fetch.py``):
   https://huggingface.co/adefossez/HTDemucs
   https://huggingface.co/adefossez/HTDemucs-ft
+  https://huggingface.co/api/resolve-cache/models/adefossez/HTDemucs
+  https://huggingface.co/api/resolve-cache/models/adefossez/HTDemucs-ft
   https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/
 """
 
