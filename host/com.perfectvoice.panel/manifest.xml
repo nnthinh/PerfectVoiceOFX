@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BlackmagicDesign>
+    <Plugin>
+        <Id>com.perfectvoice.panel</Id>
+        <Name>PerfectVoice</Name>
+        <Version>0.1.0</Version>
+        <Description>Remove musical accompaniment from timeline clips</Description>
+        <FilePath>main.js</FilePath>
+    </Plugin>
+</BlackmagicDesign>

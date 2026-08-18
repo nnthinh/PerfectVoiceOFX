@@ -1,0 +1,6 @@
+{
+    "name": "perfectvoice-hello-spike",
+    "version": "0.0.1",
+    "description": "Spike: spawn hello-engine from a Resolve Workflow Integration panel",
+    "main": "main.js"
+}

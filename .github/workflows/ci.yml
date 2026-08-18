@@ -6,14 +6,14 @@ on:
 
 jobs:
   check:
-    name: URL gate and compile
+    name: URL gate, compile, Appendix A tests
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Forbid official Demucs remotes in load/infer/panel paths
         run: bash scripts/ci_forbid_demucs_urls.sh
       - name: Compile engine package
-        run: python3 -m compileall -q engine/perfectvoice_engine
+        run: python3 -m compileall -q engine/perfectvoice_engine shared scripts
       - name: Schema contract tests
         run: |
           python3 -m pip install --user 'jsonschema>=4.18'
@@ -32,3 +32,7 @@ jobs:
         run: |
           python3 -m pip install --user 'numpy>=1.24'
           python3 -m unittest tests.unit.test_separate tests.unit.test_ola tests.unit.test_isolate_cli
+      - name: Appendix A unit tests
+        run: python3 -m unittest tests.unit.test_perfectvoice_time tests.unit.test_selection_dedupe
+      - name: Panel resolve JS tests (dedupe + Appendix A)
+        run: node --test host/com.perfectvoice.panel/resolve/*.test.js

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>PerfectVoice Hello Spike</title>
+    <script type="text/javascript" src="./renderer.js"></script>
+    <style>
+        body { font-family: -apple-system, sans-serif; margin: 16px; color: #eee; background: #1b1b1b; }
+        button { padding: 8px 14px; cursor: pointer; }
+        #enginePath, #log { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; }
+        #log { background: #111; padding: 8px; min-height: 8em; }
+    </style>
+</head>
+<body>
+    <h2>PerfectVoice hello-engine spike</h2>
+    <p>Spawns an absolute-path hello binary with the §3.8 contract. Does not load Demucs.</p>
+    <p>enginePath: <span id="enginePath">…</span></p>
+    <p><button id="spawnBtn" type="button">Spawn hello-engine</button></p>
+    <pre id="log"></pre>
+</body>
+</html>

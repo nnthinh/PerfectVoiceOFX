@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BlackmagicDesign>
+    <Plugin>
+        <Id>com.perfectvoice.hello.spike</Id>
+        <Name>PerfectVoice Hello Spike</Name>
+        <Version>0.0.1</Version>
+        <Description>Spike: spawn absolute-path hello-engine from Workflow Integration</Description>
+        <FilePath>main.js</FilePath>
+    </Plugin>
+</BlackmagicDesign>
