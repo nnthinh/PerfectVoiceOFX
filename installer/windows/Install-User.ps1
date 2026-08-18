@@ -6,10 +6,12 @@
 .DESCRIPTION
   Copies a PyInstaller onedir to
     %LOCALAPPDATA%\PerfectVoice\engine\perfectvoice-engine.exe
-  and the panel to the per-user Resolve Workflow Integration Plugins dir.
+  and the panel to the per-user Resolve Workflow Integration Plugins dir
+    %APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Workflow Integration Plugins\com.perfectvoice.panel\
 
   Frozen §3.8 / PR 02 IPC: token-file or stdin, bind 127.0.0.1, no --token-fd 3.
-  protocol_version = 1. Does not bundle Demucs/DFN weights.
+  --token-fd is forbidden. protocol_version = 1. Does not bundle Demucs/DFN weights.
+  Reinstall wipes dest engine + panel trees (no overlay, no leftover .node / DLLs).
 #>
 [CmdletBinding()]
 param(
@@ -33,6 +35,8 @@ $Script:EngineName = "perfectvoice-engine.exe"
 #   %LOCALAPPDATA%\PerfectVoice\Logs
 #   %LOCALAPPDATA%\PerfectVoice\Cache
 #   %LOCALAPPDATA%\PerfectVoice\run
+#   %LOCALAPPDATA%\PerfectVoice\config.json
+#   %APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Workflow Integration Plugins\com.perfectvoice.panel
 $Script:WeightGlobs = @(
     "*.th", "*.bin", "*.safetensors", "*.ckpt",
     "*.pt", "*.pth", "*.onnx", "*.onnx.data"
@@ -90,10 +94,20 @@ function Get-Destinations {
     }
 }
 
+function Test-IsPathUnder {
+    param([string]$PathValue, [string]$Root)
+    if (-not $PathValue -or -not $Root) { return $false }
+    $full = [System.IO.Path]::GetFullPath($PathValue).TrimEnd("\")
+    $prefix = [System.IO.Path]::GetFullPath($Root).TrimEnd("\")
+    if ($full.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+    return $full.StartsWith(($prefix + "\"), [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Test-ForbiddenRoot {
     param([string]$PathValue)
     if (-not $PathValue) { return $false }
-    $full = [System.IO.Path]::GetFullPath($PathValue)
     $blocked = @(
         ${env:ProgramFiles},
         ${env:ProgramFiles(x86)},
@@ -103,32 +117,66 @@ function Test-ForbiddenRoot {
         "C:\ProgramData"
     ) | Where-Object { $_ }
     foreach ($b in $blocked) {
-        $prefix = [System.IO.Path]::GetFullPath($b).TrimEnd("\")
-        if ($full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if (Test-IsPathUnder -PathValue $PathValue -Root $b) {
             return $true
         }
     }
     return $false
 }
 
+function Test-WritesLiveUserProfile {
+    param($Dest)
+    $local = Get-LocalAppData
+    $roaming = Get-RoamingAppData
+    return (
+        (Test-IsPathUnder -PathValue $Dest.Engine -Root $local) -or
+        (Test-IsPathUnder -PathValue $Dest.Panel -Root $roaming)
+    )
+}
+
 function Find-WeightFiles {
     param([string]$Root)
     if (-not (Test-Path -LiteralPath $Root)) { return @() }
     $hits = @()
-    foreach ($g in $Script:WeightGlobs) {
-        $hits += @(Get-ChildItem -LiteralPath $Root -Recurse -File -Filter $g -ErrorAction SilentlyContinue)
+    $files = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue)
+    foreach ($f in $files) {
+        foreach ($g in $Script:WeightGlobs) {
+            if ($f.Name -like $g) {
+                $hits += $f
+                break
+            }
+        }
     }
     return $hits
 }
 
 function Assert-NoWeights {
     param([string]$Root, [string]$Label)
-    $hits = Find-WeightFiles -Root $Root
+    $hits = @(Find-WeightFiles -Root $Root)
     if ($hits.Count -gt 0) {
         [Console]::Error.WriteLine("refusing: model weights in $Label (installer must not bundle Demucs/DFN):")
         foreach ($h in $hits) { [Console]::Error.WriteLine("  $($h.FullName)") }
         exit 1
     }
+}
+
+function Assert-NoBundledNode {
+    param([string]$Root, [string]$Label)
+    if (-not (Test-Path -LiteralPath $Root)) { return }
+    $hits = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force -Filter "WorkflowIntegration.node" -ErrorAction SilentlyContinue)
+    if ($hits.Count -gt 0) {
+        [Console]::Error.WriteLine("refusing: WorkflowIntegration.node must be copied from the host Resolve, not bundled ($Label):")
+        foreach ($h in $hits) { [Console]::Error.WriteLine("  $($h.FullName)") }
+        exit 1
+    }
+}
+
+function Reset-DestTree {
+    param([string]$PathValue)
+    if (Test-Path -LiteralPath $PathValue) {
+        Remove-Item -LiteralPath $PathValue -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $PathValue | Out-Null
 }
 
 function Test-LooksLikePythonScript {
@@ -163,26 +211,46 @@ function Get-RepoRoot {
 function Copy-TreeFiltered {
     param([string]$Source, [string]$Dest)
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+    # Junk only. Weights and WorkflowIntegration.node are fail-closed on the
+    # source *before* copy — this must not silently strip them.
     $excludeNames = @{
-        "WorkflowIntegration.node" = $true
-        "install-user.sh"          = $true
-        ".gitkeep"                 = $true
-        ".DS_Store"                = $true
-        "__pycache__"              = $true
+        "install-user.sh" = $true
+        ".gitkeep"        = $true
+        ".DS_Store"       = $true
+        "__pycache__"     = $true
     }
     Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
         $name = $_.Name
         if ($excludeNames.ContainsKey($name)) { return }
         if ($name -like "*.test.js") { return }
-        foreach ($g in $Script:WeightGlobs) {
-            if ($name -like $g) { return }
-        }
         $target = Join-Path $Dest $name
         if ($_.PSIsContainer) {
             Copy-TreeFiltered -Source $_.FullName -Dest $target
         } else {
             Copy-Item -LiteralPath $_.FullName -Destination $target -Force
         }
+    }
+}
+
+function Assert-DestSubsetOfSource {
+    param([string]$Source, [string]$Dest, [string]$Label)
+    if (-not (Test-Path -LiteralPath $Dest)) { return }
+    $srcRoot = (Resolve-Path -LiteralPath $Source).Path.TrimEnd("\")
+    $dstRoot = (Resolve-Path -LiteralPath $Dest).Path.TrimEnd("\")
+    $extras = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $Dest -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        $rel = $f.FullName.Substring($dstRoot.Length).TrimStart("\")
+        if ($rel -eq "ENGINE-STUB.txt") { continue }
+        if ($rel -eq "WorkflowIntegration.node") { continue }
+        $srcFile = Join-Path $srcRoot $rel
+        if (-not (Test-Path -LiteralPath $srcFile)) {
+            $extras += $rel
+        }
+    }
+    if ($extras.Count -gt 0) {
+        [Console]::Error.WriteLine("refusing: leftover files in $Label not present in source onedir:")
+        foreach ($e in $extras) { [Console]::Error.WriteLine("  $e") }
+        exit 1
     }
 }
 
@@ -250,9 +318,20 @@ in the panel. Do not install under Program Files / ProgramData.
 }
 
 function Install-Payload {
-    param($Dest, [string]$EngineDirValue, [switch]$AllowStub)
+    param(
+        $Dest,
+        [string]$EngineDirValue,
+        [switch]$AllowStub,
+        [switch]$CopyHostNode
+    )
 
-    New-Item -ItemType Directory -Force -Path $Dest.Engine, $Dest.Models, $Dest.Logs, $Dest.Cache, $Dest.Run, $Dest.Panel | Out-Null
+    $repo = Get-RepoRoot
+    $panelSrc = Join-Path $repo "host\com.perfectvoice.panel"
+    if (-not (Test-Path -LiteralPath (Join-Path $panelSrc "manifest.xml"))) {
+        Fail-Policy "panel source missing manifest.xml: $panelSrc"
+    }
+    Assert-NoWeights -Root $panelSrc -Label "panel source"
+    Assert-NoBundledNode -Root $panelSrc -Label "panel source"
 
     if ($EngineDirValue) {
         if (-not (Test-Path -LiteralPath $EngineDirValue -PathType Container)) {
@@ -269,30 +348,32 @@ function Install-Payload {
         if (-not (Test-PeHeader -PathValue $exe)) {
             Fail-Policy "refusing: engine is not a PE (need a PyInstaller onedir with ${Script:EngineName})"
         }
+    } elseif (-not $AllowStub) {
+        Fail-Policy "refusing: -EngineDir is required unless -DryRun (PyInstaller onedir with $Script:EngineName)"
+    }
+
+    # Replace dest trees so a second install cannot see a leftover host .node
+    # or stale CUDA _internal DLLs from a previous onedir.
+    Reset-DestTree -PathValue $Dest.Engine
+    Reset-DestTree -PathValue $Dest.Panel
+    New-Item -ItemType Directory -Force -Path $Dest.Models, $Dest.Logs, $Dest.Cache, $Dest.Run | Out-Null
+
+    if ($EngineDirValue) {
         Copy-TreeFiltered -Source $EngineDirValue -Dest $Dest.Engine
+        Assert-DestSubsetOfSource -Source $EngineDirValue -Dest $Dest.Engine -Label "staged engine"
         Write-Info "staged engine from onedir: $EngineDirValue"
-    } elseif ($AllowStub) {
+    } else {
         Write-EngineStubNote -DestDir $Dest.Engine
         Write-Info "staged engine stub (pass -EngineDir for a CUDA onedir)"
-    } else {
-        Fail-Policy "refusing: -EngineDir is required for a real install (PyInstaller onedir with $Script:EngineName)"
     }
 
-    $repo = Get-RepoRoot
-    $panelSrc = Join-Path $repo "host\com.perfectvoice.panel"
-    if (-not (Test-Path -LiteralPath (Join-Path $panelSrc "manifest.xml"))) {
-        Fail-Policy "panel source missing manifest.xml: $panelSrc"
-    }
     Copy-TreeFiltered -Source $panelSrc -Dest $Dest.Panel
 
-    $nodeInPanel = Join-Path $Dest.Panel "WorkflowIntegration.node"
-    if (Test-Path -LiteralPath $nodeInPanel) {
-        Fail-Policy "refusing: WorkflowIntegration.node must be copied from the host Resolve, not bundled"
-    }
+    Assert-NoBundledNode -Root $Dest.Panel -Label "staged panel"
     Assert-NoWeights -Root $Dest.Engine -Label "staged engine"
     Assert-NoWeights -Root $Dest.Panel -Label "staged panel"
 
-    if (-not $AllowStub) {
+    if ($CopyHostNode) {
         Copy-WorkflowNode -PanelDest $Dest.Panel
     }
 }
@@ -327,9 +408,12 @@ if ($System) {
     Fail-Policy "refusing: will not install into Program Files / ProgramData (panel + engine are user-space). omit -System; use the default %LOCALAPPDATA% / %APPDATA% destinations." 2
 }
 
-if (-not $DryRun -and -not $StageRoot -and (Test-IsAdministrator)) {
-    Fail-Policy "refusing: will not install as Administrator (user-space only; no Program Files, no admin-owned %LOCALAPPDATA%). run as the editor account." 2
+# -EngineDir is required for any real write. -DryRun may stage a stub.
+if (-not $DryRun -and -not $EngineDir -and -not $Uninstall) {
+    Fail-Policy "refusing: -EngineDir is required unless -DryRun"
 }
+
+$liveInstall = (-not $DryRun) -and (-not $StageRoot)
 
 $stageForDryRun = $false
 if ($DryRun -and -not $StageRoot) {
@@ -341,6 +425,12 @@ $dest = Get-Destinations -Root $StageRoot
 
 if ((Test-ForbiddenRoot $dest.Engine) -or (Test-ForbiddenRoot $dest.Panel)) {
     Fail-Policy "refusing: destination is under Program Files / ProgramData." 2
+}
+
+# Refuse Administrator on a live user-profile dest (StageRoot remapped
+# elsewhere may still run elevated for CI). DryRun temp is not live.
+if ((-not $DryRun) -and (Test-IsAdministrator) -and (Test-WritesLiveUserProfile $dest)) {
+    Fail-Policy "refusing: will not install as Administrator (user-space only; no Program Files, no admin-owned %LOCALAPPDATA%). run as the editor account." 2
 }
 
 Write-Info "PerfectVoice Windows $Script:Version (protocol_version=$Script:ProtocolVersion, sku=cu126)"
@@ -369,7 +459,7 @@ if ($Uninstall) {
 }
 
 try {
-    Install-Payload -Dest $dest -EngineDirValue $EngineDir -AllowStub:($DryRun -or [bool]$StageRoot)
+    Install-Payload -Dest $dest -EngineDirValue $EngineDir -AllowStub:$DryRun -CopyHostNode:$liveInstall
 } catch {
     if ($stageForDryRun -and $StageRoot -and (Test-Path -LiteralPath $StageRoot)) {
         Remove-Item -LiteralPath $StageRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -377,7 +467,7 @@ try {
     throw
 }
 
-if (-not $DryRun -and -not $StageRoot) {
+if ($liveInstall) {
     if (-not (Test-VcRedist)) {
         Write-Info "WARNING: Microsoft Visual C++ 2015-2022 (x64) not detected."
         Write-Info "Install https://aka.ms/vs/17/release/vc_redist.x64.exe before launching the CUDA engine."
@@ -386,6 +476,9 @@ if (-not $DryRun -and -not $StageRoot) {
     if (-not $smi) {
         Write-Info "WARNING: nvidia-smi not on PATH. v1.1 expects an NVIDIA driver >= 560 (CUDA 12.6 / cu126)."
     }
+    Write-Info "WARNING: Resolve's documented WI plugin scan is %PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Support\Workflow Integration Plugins\."
+    Write-Info "This installer will not write ProgramData (no admin). User-space dest is %APPDATA%\…\Workflow Integration Plugins\com.perfectvoice.panel\."
+    Write-Info "If Workspace → Workflow Integrations does not list PerfectVoice after restart, copy that folder into the PROGRAMDATA path by hand. Do not re-run this script elevated."
 }
 
 if ($DryRun) {
@@ -397,10 +490,14 @@ if ($DryRun) {
     exit 0
 }
 
+$exeOut = Join-Path $dest.Engine $Script:EngineName
 Write-Info "installed user-space:"
-Write-Info "  $($dest.Engine)\$Script:EngineName"
+if (Test-Path -LiteralPath $exeOut) {
+    Write-Info "  $exeOut"
+} else {
+    Write-Info "  $($dest.Engine) (no $Script:EngineName — stub/stage only)"
+}
 Write-Info "  $($dest.Panel)"
+Write-Info "enginePath (§3.8 rule 4): $exeOut"
 Write-Info "Restart DaVinci Resolve Studio → Workspace → Workflow Integrations → PerfectVoice."
-Write-Info "enginePath: $($dest.Engine)\$Script:EngineName"
-Write-Info "If the panel is still a macOS-first build, set PERFECTVOICE_ENGINE to that absolute path."
 exit 0

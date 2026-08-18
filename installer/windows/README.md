@@ -19,23 +19,32 @@ HTTP contract.
 | Config | `%LOCALAPPDATA%\PerfectVoice\config.json` |
 | Panel | `%APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Workflow Integration Plugins\com.perfectvoice.panel\` |
 
-`enginePath` rule 4: file trên **phải** tồn tại; panel `spawn` absolute path,
-không `PATH`, không relative. Dev: env `PERFECTVOICE_ENGINE` (absolute).
+`enginePath` rule 4: panel trên Windows đọc
+`%LOCALAPPDATA%\PerfectVoice\engine\perfectvoice-engine.exe` (không `~/Library`).
+`spawn` absolute path; env Win32 giữ `SYSTEMROOT` + `LOCALAPPDATA` + PATH tối thiểu
+`%SystemRoot%\System32`. Dev: env `PERFECTVOICE_ENGINE` (absolute).
 
 Design ghi path plugin all-users `%PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Support\Workflow Integration Plugins\`.
 Installer **từ chối** `-System` / `Program Files` / `ProgramData` (không admin,
-không đè plugin máy). Copy tay vào PROGRAMDATA nếu máy không scan `%APPDATA%`.
+không đè plugin máy). **Chưa** có spike Windows xác nhận Resolve scan `%APPDATA%`.
+Nếu Workspace → Workflow Integrations không hiện PerfectVoice: copy **tay** thư mục
+user-space vào PROGRAMDATA. **Không** chạy lại script elevated — script từ chối
+Administrator trên dest live.
 
 Lock file (khi engine implement): `%LOCALAPPDATA%\PerfectVoice\engine.lock`.
+
+Reinstall **xóa** dest `engine\` + `panel\` rồi copy lại (không overlay). Leftover
+`.node` / `_internal` DLL / weight từ lần trước không được giữ.
 
 ## Payload
 
 - **Engine:** PyInstaller **onedir** Windows x64, entry `perfectvoice-engine.exe`.
   Torch wheel **cu126** (xem [CUDA SKU](#cuda-sku)). **Không** Python / conda user.
 - **Không** bundle official `htdemucs*` / `.th` / `.safetensors` / DeepFilterNet
-  `*.onnx`. User click *Download model* (PR 15). `-EngineDir` **fail-closed**
-  nếu onedir còn checkpoint.
-- **Không** bundle `WorkflowIntegration.node` (copy từ Studio đang cài).
+  `*.onnx`. User click *Download model* (PR 15). `-EngineDir` **và** panel source
+  **fail-closed** nếu còn checkpoint (scan cả file ẩn; copier **không** strip).
+- **Không** bundle `WorkflowIntegration.node`. Có trong `host/…/panel` → exit 1.
+  Copy từ Studio **sau** khi dest panel đã wipe sạch.
 - IPC không đổi: `serve --bind 127.0.0.1 --port 0 --token-file <abs>`
   (hoặc một dòng token trên stdin rồi EOF). Cấm `--token-fd`.
 

@@ -8,6 +8,7 @@ repo="$(cd "$win/../.." && pwd)"
 ps1="$win/Install-User.ps1"
 readme="$win/README.md"
 sku="$win/cuda-sku.txt"
+engine_js="$repo/host/com.perfectvoice.panel/engine.js"
 
 fail=0
 note() { printf '%s\n' "$*"; }
@@ -26,6 +27,7 @@ require_file "$sku"
 require_file "$win/install-user.cmd"
 require_file "$win/Uninstall-User.ps1"
 require_file "$win/uninstall-user.cmd"
+require_file "$engine_js"
 
 # Path table §3.8 (README uses single backslashes inside backticks).
 for needle in \
@@ -33,12 +35,16 @@ for needle in \
   '%LOCALAPPDATA%\\PerfectVoice\\models' \
   '%LOCALAPPDATA%\\PerfectVoice\\Logs' \
   '%LOCALAPPDATA%\\PerfectVoice\\Cache' \
-  '%LOCALAPPDATA%\\PerfectVoice\\run'
+  '%LOCALAPPDATA%\\PerfectVoice\\run' \
+  '%LOCALAPPDATA%\\PerfectVoice\\config.json' \
+  '%APPDATA%\\Blackmagic Design\\DaVinci Resolve\\Support\\Workflow Integration Plugins\\com.perfectvoice.panel'
 do
-  # README is markdown: \ is a single backslash in the file.
   plain="${needle//\\\\/\\}"
   if ! grep -Fq "$plain" "$readme"; then
     bad "README missing path $plain"
+  fi
+  if ! grep -Fq "$plain" "$ps1"; then
+    bad "Install-User.ps1 missing path $plain"
   fi
 done
 
@@ -46,7 +52,6 @@ if ! grep -Fq 'perfectvoice-engine.exe' "$readme"; then
   bad "README missing enginePath perfectvoice-engine.exe"
 fi
 
-# Scripts must target the same dests (frozen path comments + Join-Path leaves).
 for needle in engine models Logs Cache run; do
   if ! grep -Eq "PerfectVoice.+$needle|Join-Path \\\$pv \"$needle\"" "$ps1"; then
     bad "Install-User.ps1 missing PerfectVoice/$needle destination"
@@ -67,9 +72,17 @@ if ! grep -Eq '\$System' "$ps1"; then
   bad "Install-User.ps1 must accept -System so it can refuse it"
 fi
 
-# Same IPC / auth as PR 02.
-if ! grep -Fq -- '--token-fd' "$ps1"; then
-  bad "Install-User.ps1 must mention --token-fd (as forbidden)"
+# Same IPC / auth as PR 02: every --token-fd hit must be a ban, not a spawn.
+token_hits="$(grep -n -- '--token-fd' "$ps1" "$readme" || true)"
+if [ -z "$token_hits" ]; then
+  bad "docs/scripts must mention --token-fd as forbidden"
+else
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if ! printf '%s' "$line" | grep -Eiq 'forbidden|no --token-fd|cấm|không|not supported|never'; then
+      bad "non-ban --token-fd line: $line"
+    fi
+  done <<< "$token_hits"
 fi
 if ! grep -Fq '127.0.0.1' "$ps1"; then
   bad "Install-User.ps1 must document bind 127.0.0.1"
@@ -77,31 +90,17 @@ fi
 if ! grep -Eq 'token-file' "$ps1"; then
   bad "Install-User.ps1 must document --token-file"
 fi
-if ! grep -Eq 'protocol_version' "$ps1"; then
-  bad "Install-User.ps1 must keep protocol_version"
-fi
 if ! grep -Eq 'ProtocolVersion = 1' "$ps1"; then
   bad "Install-User.ps1 protocol_version must stay 1"
 fi
-if grep -En -- '--token-fd' "$ps1" | grep -Ev 'forbidden|no --token-fd|cấm' >/dev/null; then
-  # still OK as long as no spawn uses it; extra check below
-  :
-fi
-if grep -Eq 'token-fd 3' "$ps1" && ! grep -Eq 'no --token-fd|forbidden' "$ps1"; then
-  bad "Install-User.ps1 must not introduce --token-fd 3 as a supported API"
-fi
 
-# protocol_version pin in sku + readme
 if ! grep -Eq '^protocol_version=1$' "$sku"; then
   bad "cuda-sku.txt protocol_version must be 1"
 fi
-if ! grep -Eq 'protocol_version.*=.*\*\*1\*\*|protocol_version` = \*\*1\*\*' "$readme"; then
-  if ! grep -Fq 'protocol_version` = **1**' "$readme" && ! grep -Fq 'protocol_version = **1**' "$readme"; then
-    bad "README must pin protocol_version = 1"
-  fi
+if ! grep -Fq 'protocol_version = **1**' "$readme" && ! grep -Fq 'protocol_version` = **1**' "$readme"; then
+  bad "README must pin protocol_version = 1"
 fi
 
-# CUDA SKU is concrete.
 if ! grep -Eq '^sku=cu126$' "$sku"; then
   bad "cuda-sku.txt must pin sku=cu126"
 fi
@@ -136,21 +135,30 @@ if find "$win" -type f \( \
     -o -name '*.onnx' -o -name '*.onnx.data' \
   \) -print | grep -q .; then
   bad "installer/windows contains weight files"
-  find "$win" -type f \( \
-      -name '*.th' -o -name '*.bin' -o -name '*.safetensors' \
-      -o -name '*.ckpt' -o -name '*.pt' -o -name '*.pth' \
-      -o -name '*.onnx' -o -name '*.onnx.data' \
-    \) -print || true
 fi
 
-# Fail-closed weight globs in the copier.
+# Fail-closed weight globs exist (scan, not silent skip).
 for g in '*.th' '*.safetensors' '*.onnx' '*.pt' '*.pth' '*.ckpt' '*.bin'; do
   if ! grep -Fq "$g" "$ps1"; then
     bad "Install-User.ps1 must fail-closed on $g"
   fi
 done
+if ! grep -Fq -- '-Force' "$ps1"; then
+  bad "Install-User.ps1 must scan hidden files (-Force) for weights"
+fi
+if awk '/function Copy-TreeFiltered/{p=1; next} p && /^function /{exit} p' "$ps1" | grep -q 'WeightGlobs'; then
+  bad "Copy-TreeFiltered must not silently skip WeightGlobs"
+fi
+if ! grep -Fq 'Reset-DestTree' "$ps1"; then
+  bad "Install-User.ps1 must wipe dest trees on reinstall (Reset-DestTree)"
+fi
+if ! grep -Fq 'Assert-NoBundledNode' "$ps1"; then
+  bad "Install-User.ps1 must fail-closed on a bundled WorkflowIntegration.node in the source"
+fi
+if ! grep -Fq 'Assert-DestSubsetOfSource' "$ps1"; then
+  bad "Install-User.ps1 must refuse leftover dest files not in the source onedir"
+fi
 
-# Must not ship WorkflowIntegration.node; must copy from host Resolve.
 if ! grep -Fq 'WorkflowIntegration.node' "$ps1"; then
   bad "Install-User.ps1 must handle WorkflowIntegration.node (copy-from-host)"
 fi
@@ -158,7 +166,20 @@ if ! grep -Eq 'must be copied from the host Resolve, not bundled' "$ps1"; then
   bad "Install-User.ps1 must refuse a bundled WorkflowIntegration.node"
 fi
 
-# Cmd wrappers must not change machine ExecutionPolicy — only Bypass this file.
+# Panel must honor Windows enginePath + spawn env (copied payload).
+if ! grep -Fq 'LOCALAPPDATA' "$engine_js"; then
+  bad "engine.js must read LOCALAPPDATA for Windows enginePath / run"
+fi
+if ! grep -Fq 'perfectvoice-engine.exe' "$engine_js"; then
+  bad "engine.js must resolve perfectvoice-engine.exe on Windows"
+fi
+if ! grep -Fq 'SYSTEMROOT' "$engine_js"; then
+  bad "engine.js spawn env must keep SYSTEMROOT on Win32"
+fi
+if ! grep -Fq 'function spawnChildEnv' "$engine_js"; then
+  bad "engine.js must export a Win32-safe spawnChildEnv"
+fi
+
 if ! grep -Fq -- '-ExecutionPolicy Bypass' "$win/install-user.cmd"; then
   bad "install-user.cmd should Bypass only this script"
 fi
@@ -166,20 +187,24 @@ if grep -Ei 'Set-ExecutionPolicy' "$win"/*.cmd "$win"/*.ps1 >/dev/null; then
   bad "must not call Set-ExecutionPolicy"
 fi
 
-# Dry-run / uninstall switches exist.
 for sw in DryRun Uninstall Purge EngineDir StageRoot; do
   if ! grep -Eq "\\\$$sw" "$ps1"; then
     bad "Install-User.ps1 missing -$sw"
   fi
 done
 
-# No stray .gitkeep once real files exist — optional; ignore.
-
-# If pwsh is present, exercise -DryRun (stub, no PE).
+# If pwsh is present, exercise gates (not expected on macOS CI).
 if command -v pwsh >/dev/null 2>&1; then
-  note "pwsh found; running -DryRun"
+  note "pwsh found; running policy probes"
   if ! pwsh -NoProfile -File "$ps1" -DryRun; then
     bad "pwsh Install-User.ps1 -DryRun failed"
+  fi
+  set +e
+  pwsh -NoProfile -File "$ps1" -System >/tmp/pv-win-sys.out 2>/tmp/pv-win-sys.err
+  rc=$?
+  set -e
+  if [ "$rc" -ne 2 ]; then
+    bad "expected -System to exit 2, got $rc"
   fi
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/pv-win-th.XXXXXX")"
   trap 'rm -rf "$tmp"' EXIT
@@ -192,6 +217,16 @@ if command -v pwsh >/dev/null 2>&1; then
   set -e
   if [ "$rc" -eq 0 ]; then
     bad "expected EngineDir with .th to fail closed"
+  fi
+  mkdir -p "$tmp/hidden"
+  printf 'MZ' > "$tmp/hidden/perfectvoice-engine.exe"
+  echo fake > "$tmp/hidden/.htdemucs.th"
+  set +e
+  pwsh -NoProfile -File "$ps1" -EngineDir "$tmp/hidden" -StageRoot "$tmp/stage2" >/tmp/pv-win-hid.out 2>/tmp/pv-win-hid.err
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    bad "expected hidden .th in EngineDir to fail closed"
   fi
 else
   note "pwsh not found; static policy only (expected on macOS CI)"

@@ -40,9 +40,20 @@ function debugLog(message) {
 }
 
 function loadWorkflowIntegrationNode() {
+    const programData =
+        process.env.PROGRAMDATA || process.env.ProgramData || "C:\\ProgramData";
+    const programFiles = process.env.ProgramFiles || "C:\\Program Files";
     const candidates = [
         path.join(__dirname, "WorkflowIntegration.node"),
         "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Workflow Integrations/Examples/SamplePlugin/WorkflowIntegration.node",
+        path.join(
+            programData,
+            "Blackmagic Design/DaVinci Resolve/Support/Developer/Workflow Integrations/Examples/SamplePlugin/WorkflowIntegration.node",
+        ),
+        path.join(
+            programFiles,
+            "Blackmagic Design/DaVinci Resolve/Developer/Workflow Integrations/Examples/SamplePlugin/WorkflowIntegration.node",
+        ),
     ];
     for (const c of candidates) {
         if (!existsFile(c)) continue;

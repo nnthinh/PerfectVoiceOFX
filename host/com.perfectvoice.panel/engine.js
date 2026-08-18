@@ -15,12 +15,21 @@ const READY_RE = /^READY (http:\/\/127\.0\.0\.1:\d+)\s*$/;
 const FAIL_CLOSED =
     "Cannot start engine (spawn blocked or not installed). Need Studio standalone + a codesigned engine.";
 const ENGINE_NOT_FOUND =
-    "Engine not found. Set PERFECTVOICE_ENGINE or install to ~/Library/Application Support/PerfectVoice/engine/perfectvoice-engine.";
+    "Engine not found. Set PERFECTVOICE_ENGINE or install to ~/Library/Application Support/PerfectVoice/engine/perfectvoice-engine (macOS) or %LOCALAPPDATA%\\PerfectVoice\\engine\\perfectvoice-engine.exe (Windows).";
 const UPDATE_ENGINE = "Update PerfectVoice engine";
 const PROTOCOL_VERSION = 1;
 
 let session = null;
 let startPromise = null;
+let platformOverride = null;
+
+function currentPlatform() {
+    return platformOverride || process.platform;
+}
+
+function localAppDataDir() {
+    return process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+}
 
 function existsFile(p) {
     try {
@@ -49,6 +58,30 @@ function isEperm(err) {
     return !!(err && (err.code === "EPERM" || err.code === "EACCES"));
 }
 
+function defaultEnginePath(platform) {
+    const plat = platform || currentPlatform();
+    if (plat === "win32") {
+        return path.join(
+            localAppDataDir(),
+            "PerfectVoice",
+            "engine",
+            "perfectvoice-engine.exe",
+        );
+    }
+    return path.join(
+        os.homedir(),
+        "Library/Application Support/PerfectVoice/engine/perfectvoice-engine",
+    );
+}
+
+function defaultRunDir(platform) {
+    const plat = platform || currentPlatform();
+    if (plat === "win32") {
+        return path.join(localAppDataDir(), "PerfectVoice", "run");
+    }
+    return path.join(os.homedir(), "Library/Application Support/PerfectVoice/run");
+}
+
 function resolveEnginePath() {
     const env = process.env.PERFECTVOICE_ENGINE;
     if (env) {
@@ -57,27 +90,54 @@ function resolveEnginePath() {
         }
         if (existsFile(env)) return env;
     }
-    const user = path.join(
-        os.homedir(),
-        "Library/Application Support/PerfectVoice/engine/perfectvoice-engine",
-    );
+    const user = defaultEnginePath();
     if (existsFile(user)) return user;
-    // Frozen §3.8 fallback (pkg / admin install).
-    const system = "/Library/Application Support/PerfectVoice/engine/perfectvoice-engine";
-    if (existsFile(system)) return system;
+    if (currentPlatform() !== "win32") {
+        // Frozen §3.8 fallback (pkg / admin install). Windows has no /Library dest.
+        const system = "/Library/Application Support/PerfectVoice/engine/perfectvoice-engine";
+        if (existsFile(system)) return system;
+    }
     return null;
 }
 
 function writeTokenFile() {
-    const runDir = path.join(
-        os.homedir(),
-        "Library/Application Support/PerfectVoice/run",
-    );
+    const runDir = defaultRunDir();
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     const tokenPath = path.join(runDir, `${crypto.randomUUID()}.token`);
     const token = crypto.randomBytes(32).toString("hex");
     fs.writeFileSync(tokenPath, token, { encoding: "utf8", mode: 0o600 });
     return { tokenPath, token };
+}
+
+function spawnChildEnv(platform, sourceEnv) {
+    const plat = platform || currentPlatform();
+    const src = sourceEnv || process.env;
+    if (plat === "win32") {
+        const systemRoot = src.SYSTEMROOT || src.SystemRoot || "C:\\Windows";
+        const system32 = path.join(systemRoot, "System32");
+        return {
+            // Minimal PATH: PE/DLL lookup needs System32. Never search PATH for the exe
+            // (spawn uses the absolute enginePath).
+            PATH: system32,
+            SYSTEMROOT: systemRoot,
+            SystemRoot: systemRoot,
+            windir: src.windir || systemRoot,
+            LOCALAPPDATA: src.LOCALAPPDATA || localAppDataDir(),
+            APPDATA: src.APPDATA || "",
+            USERPROFILE: src.USERPROFILE || os.homedir(),
+            HOMEDRIVE: src.HOMEDRIVE || "",
+            HOMEPATH: src.HOMEPATH || "",
+            TEMP: src.TEMP || src.TMP || "",
+            TMP: src.TMP || src.TEMP || "",
+            PATHEXT: src.PATHEXT || ".COM;.EXE;.BAT;.CMD",
+            PROCESSOR_ARCHITECTURE: src.PROCESSOR_ARCHITECTURE || "",
+        };
+    }
+    return {
+        PATH: "",
+        HOME: src.HOME || "",
+        TMPDIR: src.TMPDIR || "",
+    };
 }
 
 function getHealth(url, token) {
@@ -457,14 +517,11 @@ function spawnEngine(absEnginePath, tokenPath) {
         "--token-file",
         tokenPath,
     ];
-    // Empty PATH: never resolve the binary via PATH.
+    // Never resolve the binary via PATH (absolute spawn). Win32 keeps
+    // SYSTEMROOT / LOCALAPPDATA so the PE and models.py §3.8 dests work.
     return spawn(absEnginePath, args, {
         cwd: engineDir,
-        env: {
-            PATH: "",
-            HOME: process.env.HOME || "",
-            TMPDIR: process.env.TMPDIR || "",
-        },
+        env: spawnChildEnv(),
         stdio: ["ignore", "pipe", "pipe"],
     });
 }
@@ -585,10 +642,17 @@ function __setSessionForTests(next) {
     session = next;
 }
 
+function __setPlatformForTests(next) {
+    platformOverride = next || null;
+}
+
 module.exports = {
     FAIL_CLOSED,
     ENGINE_NOT_FOUND,
     UPDATE_ENGINE,
+    defaultEnginePath,
+    defaultRunDir,
+    spawnChildEnv,
     resolveEnginePath,
     startEngine,
     stopEngine,
@@ -603,6 +667,7 @@ module.exports = {
     downloadModel,
     refreshCapabilities,
     __setSessionForTests,
+    __setPlatformForTests,
 };
 
 if (require.main === module) {

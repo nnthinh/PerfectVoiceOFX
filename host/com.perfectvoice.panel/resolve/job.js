@@ -24,6 +24,11 @@ function finiteNumber(value) {
 }
 
 function defaultOutputDir() {
+    if (process.platform === "win32") {
+        const root =
+            process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+        return path.join(root, "PerfectVoice", "output", crypto.randomUUID());
+    }
     return path.join(
         os.homedir(),
         "Library/Application Support/PerfectVoice/output",

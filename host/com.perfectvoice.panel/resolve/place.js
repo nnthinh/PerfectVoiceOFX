@@ -215,6 +215,11 @@ function computePlace(params) {
 }
 
 function defaultTestWavPath() {
+    if (process.platform === "win32") {
+        const root =
+            process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+        return path.join(root, "PerfectVoice", "tmp", "place-test.wav");
+    }
     return path.join(
         os.homedir(),
         "Library/Application Support/PerfectVoice/tmp/place-test.wav",
