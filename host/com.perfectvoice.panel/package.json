@@ -2,5 +2,8 @@
     "name": "com.perfectvoice.panel",
     "version": "0.1.0",
     "description": "PerfectVoice Workflow Integration panel",
-    "main": "main.js"
+    "main": "main.js",
+    "scripts": {
+        "test": "node --test resolve/*.test.js"
+    }
 }

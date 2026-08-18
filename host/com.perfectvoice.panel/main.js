@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const { startEngine, stopEngine, getPublicStatus } = require("./engine");
+const { inspectSelection, placeIsolated, placeTestWav } = require("./resolve");
 
 const PLUGIN_ID = "com.perfectvoice.panel";
 const STUDIO_REQUIRED =
@@ -53,6 +54,8 @@ function loadWorkflowIntegrationNode() {
     return null;
 }
 
+let initPromise = null;
+
 async function initResolveInterface() {
     if (!WorkflowIntegration) {
         WorkflowIntegration = loadWorkflowIntegrationNode();
@@ -73,6 +76,11 @@ async function initResolveInterface() {
     resolveReady = true;
     resolveError = null;
     return WorkflowIntegration.GetResolve();
+}
+
+function ensureResolveInit() {
+    if (!initPromise) initPromise = initResolveInterface();
+    return initPromise;
 }
 
 function panelStatus() {
@@ -101,12 +109,45 @@ function registerIpc() {
             };
         }
     });
+    ipcMain.handle("pv:inspect", async () => {
+        try {
+            const resolve = await ensureResolveInit();
+            if (!resolve) {
+                return { ok: false, error: resolveError || STUDIO_REQUIRED };
+            }
+            return inspectSelection(resolve);
+        } catch (err) {
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    });
+    ipcMain.handle("pv:placeTestWav", async (_e, params) => {
+        try {
+            const resolve = await ensureResolveInit();
+            if (!resolve) {
+                return { ok: false, error: resolveError || STUDIO_REQUIRED };
+            }
+            return placeTestWav(resolve, params || {});
+        } catch (err) {
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    });
+    ipcMain.handle("pv:placeIsolated", async (_e, params) => {
+        try {
+            const resolve = await ensureResolveInit();
+            if (!resolve) {
+                return { ok: false, error: resolveError || STUDIO_REQUIRED };
+            }
+            return placeIsolated(resolve, params || {});
+        } catch (err) {
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    });
 }
 
 function createWindow() {
     mainWindow = new BrowserWindow({
-        width: 520,
-        height: 520,
+        width: 560,
+        height: 760,
         useContentSize: true,
         webPreferences: {
             preload: path.join(__dirname, "preload.js"),
@@ -132,7 +173,7 @@ function shutdown() {
 app.whenReady().then(() => {
     registerIpc();
     createWindow();
-    initResolveInterface().catch((e) => debugLog(String(e)));
+    ensureResolveInit().catch((e) => debugLog(String(e)));
 });
 
 app.on("window-all-closed", () => {

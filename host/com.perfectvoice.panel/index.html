@@ -37,9 +37,31 @@
             min-height: 5em;
             margin: 6px 0 0;
         }
-        #error, #resolveNote { color: #e88; font-size: 12px; margin-top: 8px; }
+        #error, #resolveNote, #inspectError { color: #e88; font-size: 12px; margin-top: 8px; }
         hr { border: 0; border-top: 1px solid #333; margin: 20px 0 16px; }
         .hint { color: #888; font-size: 12px; margin: 6px 0 0; }
+        .clips { list-style: none; padding: 0; margin: 8px 0 0; }
+        .clips li {
+            background: #111;
+            border: 1px solid #333;
+            padding: 8px 10px;
+            margin: 6px 0;
+            font-size: 12px;
+        }
+        .clips .name { font-weight: 600; }
+        .clips .path {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            word-break: break-all;
+            color: #bbb;
+            margin: 2px 0;
+        }
+        .clips .meta { color: #aaa; }
+        .clips .rej { color: #e88; margin: 2px 0 0; }
+        .clips .okc { color: #6c6; margin: 2px 0 0; }
+        .clips .warn { color: #db6; margin: 2px 0 0; }
+        .clips .dup { color: #888; }
+        #inspectMeta { white-space: pre-wrap; }
+        button + button { margin-left: 8px; }
     </style>
 </head>
 <body>
@@ -55,8 +77,19 @@
     <p id="resolveNote"></p>
 
     <hr>
+    <div class="row"><strong>Selection</strong></div>
+    <p>
+        <button id="inspectBtn" type="button">Inspect selection</button>
+        <button id="placeBtn" type="button">Place test WAV</button>
+    </p>
+    <p class="hint">Inspect lists selected clips and reject reasons. Place test WAV imports silence onto PV Isolated Voice using Appendix A handles. Jobs are not in this release.</p>
+    <div id="inspectMeta" class="hint"></div>
+    <ul id="clipList" class="clips"></ul>
+    <p id="inspectError"></p>
+
+    <hr>
     <div class="row"><strong>Remove musical accompaniment</strong></div>
     <p><button type="button" disabled>Remove musical accompaniment</button></p>
-    <p class="hint">Clip inspect, place, and jobs are not in this release.</p>
+    <p class="hint">POST /v1/jobs is not wired in this release.</p>
 </body>
 </html>

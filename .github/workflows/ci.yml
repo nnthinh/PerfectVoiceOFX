@@ -16,3 +16,5 @@ jobs:
         run: python3 -m compileall -q engine/perfectvoice_engine shared scripts
       - name: Appendix A unit tests
         run: python3 -m unittest discover -s tests/unit -v
+      - name: Panel resolve JS tests (dedupe + Appendix A)
+        run: node --test host/com.perfectvoice.panel/resolve/*.test.js
