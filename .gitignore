@@ -40,6 +40,9 @@ engine/models/**/*.th
 *.node
 host/**/WorkflowIntegration.node
 
+# Spike Mach-O (built by scripts/spikes/build-hello-engine.sh)
+scripts/spikes/hello-engine
+
 # IDE / editor
 .idea/
 .vscode/
