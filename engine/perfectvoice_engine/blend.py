@@ -68,9 +68,19 @@ def _match_channels(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarra
     raise ValueError(f"cannot mix {a.shape[1]} ch with {b.shape[1]} ch")
 
 
+def _owned(arr: np.ndarray) -> np.ndarray:
+    return np.array(arr, dtype=np.float32, copy=True)
+
+
 def _match_length(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    # Independent soxr passes can differ by 1 frame; do not pad silence into the mix.
-    n = min(a.shape[0], b.shape[0])
+    # Independent soxr passes can differ by 1 frame; do not pad silence.
+    # A larger gap is a stem-length bug — do not hide it by truncating.
+    na, nb = int(a.shape[0]), int(b.shape[0])
+    if abs(na - nb) > 1:
+        raise ValueError(
+            f"dry/vocals length mismatch {na} vs {nb} frames (allowed ±1 for soxr)"
+        )
+    n = min(na, nb)
     return a[:n], b[:n]
 
 
@@ -102,12 +112,12 @@ def wet_dry_mix(
     x, v = _match_channels(x, v)
     x, v = _match_length(x, v)
     if w == 0.0:
-        y = x
+        y = _owned(x)
     elif w == 1.0:
-        y = v
+        y = _owned(v)
     else:
         y = (np.float32(1.0) - np.float32(w)) * x + np.float32(w) * v
-    y = np.ascontiguousarray(y, dtype=np.float32)
+        y = np.ascontiguousarray(y, dtype=np.float32)
     if sx and sv and y.shape[1] == 1:
         return y[:, 0]
     return y
@@ -120,10 +130,10 @@ def apply_output_gain(
     g = _validate_gain_db(gain_db)
     arr, squeeze = _as_frames(samples)
     if g == 0.0:
-        out = arr
+        out = _owned(arr)
     else:
         out = arr * np.float32(10.0 ** (g / 20.0))
-    out = np.ascontiguousarray(out, dtype=np.float32)
+        out = np.ascontiguousarray(out, dtype=np.float32)
     return out[:, 0] if squeeze else out
 
 
@@ -131,7 +141,7 @@ def fold_mono_mid(samples: np.ndarray) -> np.ndarray:
     """Mid = mean of channels. Always ``[frames, 1]``."""
     arr, _ = _as_frames(samples)
     if arr.shape[1] == 1:
-        return np.ascontiguousarray(arr, dtype=np.float32)
+        return _owned(arr)
     mid = arr.mean(axis=1, keepdims=True, dtype=np.float64).astype(np.float32)
     return np.ascontiguousarray(mid, dtype=np.float32)
 
@@ -202,6 +212,8 @@ def blend(
     wet_dry_n = int(y.shape[0])
     y = to_project_rate(y, wd_sr, project_sample_rate)
     y, _ = _as_frames(y)
+    # soxr identity (in_sr == out_sr) can return a view; result must own its buffer.
+    y = _owned(y)
     peak = float(np.max(np.abs(y))) if y.size else 0.0
     return BlendResult(
         samples=y,

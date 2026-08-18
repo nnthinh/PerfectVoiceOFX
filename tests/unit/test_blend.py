@@ -121,6 +121,45 @@ class WetDryIdentityTests(unittest.TestCase):
         y = wet_dry_mix(x, v)
         np.testing.assert_allclose(y, np.full_like(x, 0.15), rtol=0, atol=1e-6)
 
+    def test_identity_result_owns_buffer(self) -> None:
+        x = _stereo_sines(64, 44100, (440.0, 550.0), 0.2)
+        v = _stereo_sines(64, 44100, (660.0, 770.0), 0.1)
+        x_before = x.copy()
+        v_before = v.copy()
+        mixed0 = wet_dry_mix(x, v, wet=0.0)
+        mixed1 = wet_dry_mix(x, v, wet=1.0)
+        self.assertFalse(np.shares_memory(mixed0, x))
+        self.assertFalse(np.shares_memory(mixed1, v))
+        mixed0[0, 0] = 9.0
+        mixed1[0, 0] = 9.0
+        np.testing.assert_array_equal(x, x_before)
+        np.testing.assert_array_equal(v, v_before)
+        result = blend(
+            x,
+            v,
+            in_sample_rate=44100,
+            enhancer="none",
+            project_sample_rate=44100,
+            wet=0.0,
+        )
+        self.assertFalse(np.shares_memory(result.samples, x))
+        result.samples[0, 0] = 9.0
+        np.testing.assert_array_equal(x, x_before)
+
+    def test_soxr_off_by_one_is_trimmed(self) -> None:
+        x = np.ones((10, 2), dtype=np.float32)
+        v = np.zeros((9, 2), dtype=np.float32)
+        y = wet_dry_mix(x, v, wet=1.0)
+        self.assertEqual(y.shape[0], 9)
+        np.testing.assert_array_equal(y, v)
+
+    def test_length_mismatch_over_one_raises(self) -> None:
+        x = np.ones((10, 2), dtype=np.float32)
+        v = np.zeros((8, 2), dtype=np.float32)
+        with self.assertRaises(ValueError) as ctx:
+            wet_dry_mix(x, v, wet=1.0)
+        self.assertIn("length mismatch", str(ctx.exception))
+
     def test_wet_one_dfn_domain_equals_resampled_vocals(self) -> None:
         n = 44100
         x = _stereo_sines(n, 44100, (440.0, 550.0), 0.2)
@@ -142,7 +181,12 @@ class WetDryIdentityTests(unittest.TestCase):
 class GainMonoTests(unittest.TestCase):
     def test_gain_zero_db_is_identity(self) -> None:
         x = _stereo_sines(128, 44100, (440.0, 550.0), 0.25)
-        np.testing.assert_array_equal(apply_output_gain(x, 0.0), x)
+        before = x.copy()
+        out = apply_output_gain(x, 0.0)
+        np.testing.assert_array_equal(out, x)
+        self.assertFalse(np.shares_memory(out, x))
+        out[0, 0] = 9.0
+        np.testing.assert_array_equal(x, before)
 
     def test_gain_plus_six_db_doubles(self) -> None:
         x = np.full((16, 2), 0.1, dtype=np.float32)
