@@ -17,11 +17,14 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+
+from perfectvoice_engine.constants import JobCancelled, raise_if_cancelled
 
 DEFAULT_HANDLE_S = 0.5
 BWF_ORIGINATOR = "PerfectVoice"
@@ -204,23 +207,67 @@ def ffprobe_bin() -> str:
     return _resolve_binary("ffprobe", _FFPROBE_ENV, _FFPROBE_HINTS)
 
 
-def _run(cmd: list[str], *, timeout: float | None = 120) -> subprocess.CompletedProcess[bytes]:
+def _run(
+    cmd: list[str],
+    *,
+    timeout: float | None = 120,
+    cancel_event: object | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    if cancel_event is None:
+        try:
+            return subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise FFmpegError(f"executable missing: {cmd[0]}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise FFmpegError(f"timed out: {cmd[0]}") from exc
+        except subprocess.CalledProcessError as exc:
+            err = (exc.stderr or b"").decode("utf-8", "replace").strip()
+            tail = err[-800:] if err else "no stderr"
+            raise FFmpegError(f"{cmd[0]} failed ({exc.returncode}): {tail}") from exc
+
+    raise_if_cancelled(cancel_event)
     try:
-        return subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            check=True,
-            capture_output=True,
-            timeout=timeout,
             stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
     except FileNotFoundError as exc:
         raise FFmpegError(f"executable missing: {cmd[0]}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise FFmpegError(f"timed out: {cmd[0]}") from exc
-    except subprocess.CalledProcessError as exc:
-        err = (exc.stderr or b"").decode("utf-8", "replace").strip()
-        tail = err[-800:] if err else "no stderr"
-        raise FFmpegError(f"{cmd[0]} failed ({exc.returncode}): {tail}") from exc
+    deadline = None if timeout is None else time.monotonic() + float(timeout)
+    try:
+        while True:
+            raise_if_cancelled(cancel_event)
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    proc.kill()
+                    proc.wait()
+                    raise FFmpegError(f"timed out: {cmd[0]}")
+            slice_s = 0.1 if remaining is None else min(0.1, remaining)
+            try:
+                out, err = proc.communicate(timeout=slice_s)
+            except subprocess.TimeoutExpired:
+                continue
+            if proc.returncode != 0:
+                tail = (err or b"").decode("utf-8", "replace").strip()[-800:] or "no stderr"
+                raise FFmpegError(f"{cmd[0]} failed ({proc.returncode}): {tail}")
+            return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    except JobCancelled:
+        proc.kill()
+        try:
+            proc.communicate(timeout=5)
+        except Exception:  # noqa: BLE001 — best-effort reap
+            pass
+        raise
 
 
 def _codec_for(sample_format: str) -> str:
@@ -324,12 +371,14 @@ def extract_with_handles(
     stream_index: int = 0,
     file_dur: float | None = None,
     source_sample_rate: int | None = None,
+    cancel_event: object | None = None,
 ) -> ExtractResult:
     """Decode + ``atrim`` by sample index, write BWF WAV (pcm24 or float32).
 
     Seek is sample-based after decode (not ``-ss`` before ``-i``) so m4a/mov
     extracts stay sample-accurate.
     """
+    raise_if_cancelled(cancel_event)
     codec = _codec_for(sample_format)
     probe = probe_audio(source, stream_index)
     reject_if_multichannel(probe.channels, path=probe.path)
@@ -380,7 +429,8 @@ def extract_with_handles(
             "-metadata",
             f"originator={BWF_ORIGINATOR}",
             str(out),
-        ]
+        ],
+        cancel_event=cancel_event,
     )
     info = inspect_wav(out)
     return ExtractResult(
@@ -394,7 +444,12 @@ def extract_with_handles(
     )
 
 
-def decode_f32(path: str | Path, *, stream_index: int = 0) -> tuple[np.ndarray, AudioProbe]:
+def decode_f32(
+    path: str | Path,
+    *,
+    stream_index: int = 0,
+    cancel_event: object | None = None,
+) -> tuple[np.ndarray, AudioProbe]:
     """Decode one stream to float32 ``[frames, ch]``. No resample, no normalize."""
     probe = probe_audio(path, stream_index)
     reject_if_multichannel(probe.channels, path=probe.path)
@@ -417,7 +472,8 @@ def decode_f32(path: str | Path, *, stream_index: int = 0) -> tuple[np.ndarray, 
                 "-c:a",
                 "pcm_f32le",
                 str(raw),
-            ]
+            ],
+            cancel_event=cancel_event,
         )
         data = np.fromfile(raw, dtype=np.float32)
     finally:
@@ -440,6 +496,7 @@ def write_wav(
     *,
     sample_format: str = "pcm24",
     originator: str = BWF_ORIGINATOR,
+    cancel_event: object | None = None,
 ) -> WavInfo:
     """Write PCM24 or float32 WAV with a BWF bext Originator."""
     codec = _codec_for(sample_format)
@@ -480,7 +537,8 @@ def write_wav(
                 "-metadata",
                 f"originator={originator}",
                 str(dest),
-            ]
+            ],
+            cancel_event=cancel_event,
         )
     finally:
         try:

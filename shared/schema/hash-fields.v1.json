@@ -34,10 +34,10 @@
       "description": "POSIX (dev, ino, size, mtime) or Windows (volume serial, file index, size, mtime). Encoding is engine-defined."
     },
     "src_in": {
-      "description": "source_in_sample (inclusive)."
+      "description": "source_in_sample: content in t0 (inclusive source samples). Not the extract window — engine applies handles."
     },
     "src_out": {
-      "description": "source_out_sample (exclusive)."
+      "description": "source_out_sample: content out t1 (exclusive source samples). Not the extract window — engine applies handles."
     },
     "audio_stream_index": {
       "type": "integer",

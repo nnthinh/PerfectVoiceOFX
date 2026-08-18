@@ -255,6 +255,30 @@ class SeparateWindowedTests(unittest.TestCase):
             f"windowed separate splice {db:.1f} dBFS (limit {_DISC_LIMIT_DBFS})",
         )
 
+    def test_window_start_remaps_progress_offsets(self) -> None:
+        seen: list[dict[str, Any]] = []
+
+        def on_progress(info: dict[str, Any]) -> None:
+            seen.append(dict(info))
+
+        sr = MODEL_SAMPLE_RATE
+        n = int(1.1 * sr)
+        wav = _sine(n, sr)
+        req = SeparateRequest(
+            wav_44100_stereo=wav,
+            model=DEFAULT_MODEL,
+            device="cpu",
+            on_progress=on_progress,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            manifest = _write_htdemucs_fixture(repo, th_payload=b"prog")
+            _separate_mocked(req, repo, manifest)
+        self.assertGreaterEqual(len(seen), 2)
+        offsets = [int(ev["segment_offset"]) for ev in seen]
+        self.assertTrue(any(off > 0 for off in offsets), offsets)
+        self.assertTrue(all(int(ev["audio_length"]) == n for ev in seen))
+
     def test_cancel_raises(self) -> None:
         FakeSeparator.instances.clear()
         event = threading.Event()

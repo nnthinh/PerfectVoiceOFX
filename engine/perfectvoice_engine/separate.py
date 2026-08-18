@@ -55,6 +55,7 @@ class SeparateRequest:
     shifts: int = DEFAULT_SHIFTS
     vocals_only_bag: bool = False
     cancel_event: object | None = None
+    on_progress: Callable[[dict[str, Any]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -136,12 +137,25 @@ def _to_numpy(value: Any) -> np.ndarray:
     return np.asarray(value, dtype=np.float32)
 
 
-def _cancel_callback(cancel_event: object | None) -> Callable[[dict[str, Any]], None] | None:
-    if cancel_event is None:
-        return None
-
-    def callback(_info: dict[str, Any]) -> None:
+def _progress_callback(
+    cancel_event: object | None,
+    on_progress: Callable[[dict[str, Any]], None] | None,
+    *,
+    n_samples: int,
+    window_start: list[int],
+) -> Callable[[dict[str, Any]], None]:
+    def callback(info: dict[str, Any]) -> None:
         raise_if_cancelled(cancel_event)
+        if on_progress is None:
+            return
+        data = info if isinstance(info, dict) else {}
+        offset = int(data.get("segment_offset") or 0) + int(window_start[0])
+        on_progress(
+            {
+                "segment_offset": offset,
+                "audio_length": int(n_samples),
+            }
+        )
 
     return callback
 
@@ -318,14 +332,16 @@ def _separate_windowed(
     *,
     window_s: float | None = None,
     overlap_s: float | None = None,
+    window_start: list[int] | None = None,
 ) -> np.ndarray:
     """Run Demucs per 10-min window and OLA outside the model.
 
     Incremental mix avoids retaining every *window* tensor. ``out`` is still
     a full-length buffer — the cap is "do not hand Demucs the whole clip",
-    not an RSS ceiling (see ``exceeds_memory_cap``). Resume of finished
-    windows and remapping Demucs ``segment_offset`` / ``audio_length`` by
-    ``window_start`` are PR 07 (job cache + SSE). Cancel discards ``out``.
+    not an RSS ceiling (see ``exceeds_memory_cap``). Clip-level cache lives
+    in the job worker; finished 10-min windows are not resumed independently.
+    Demucs ``segment_offset`` is remapped by ``window_start`` for SSE.
+    Cancel discards ``out``.
     """
     n_samples = int(wav.shape[-1])
     channels = int(wav.shape[0])
@@ -338,6 +354,8 @@ def _separate_windowed(
     out = np.zeros((channels, n_samples), dtype=np.float32)
     last = len(slices) - 1
     for i, (start, end) in enumerate(slices):
+        if window_start is not None:
+            window_start[0] = int(start)
         raise_if_cancelled(cancel_event)
         piece = _separate_one(separator, wav[:, start:end], cancel_event)
         fade_in = overlap if i > 0 else 0
@@ -354,6 +372,14 @@ def separate_vocals(req: SeparateRequest, local_repo: Path) -> SeparateResult:
     wav = _as_channels_first(req.wav_44100_stereo)
     device = resolve_device(req.device)
     windowed = should_window(int(wav.shape[-1]), int(wav.shape[0]), MODEL_SAMPLE_RATE)
+    n_samples = int(wav.shape[-1])
+    window_start = [0]
+    callback = _progress_callback(
+        req.cancel_event,
+        req.on_progress,
+        n_samples=n_samples,
+        window_start=window_start,
+    )
 
     with _offline_hub_env():
         separator = _separator_cls()(
@@ -366,11 +392,13 @@ def separate_vocals(req: SeparateRequest, local_repo: Path) -> SeparateResult:
             segment=float(req.segment),
             jobs=0,
             progress=False,
-            callback=_cancel_callback(req.cancel_event),
+            callback=callback,
         )
         started = time.perf_counter()
         if windowed:
-            vocals = _separate_windowed(separator, wav, req.cancel_event)
+            vocals = _separate_windowed(
+                separator, wav, req.cancel_event, window_start=window_start
+            )
         else:
             vocals = _separate_one(separator, wav, req.cancel_event)
     vocals = _as_channels_first(vocals)

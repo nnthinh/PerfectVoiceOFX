@@ -63,12 +63,12 @@
     "source_in_sample": {
       "type": "integer",
       "minimum": 0,
-      "description": "Inclusive extract start at source_sample_rate (half-up from t0 − H_left_actual)."
+      "description": "Inclusive content start t0 at source_sample_rate (samples). Does NOT include handles — the engine applies Appendix A and is source of truth. Panel must not pre-add H."
     },
     "source_out_sample": {
       "type": "integer",
       "minimum": 1,
-      "description": "Exclusive extract end at source_sample_rate (half-up from t1 + H_right_actual)."
+      "description": "Exclusive content end t1 at source_sample_rate (samples). Does NOT include handles — the engine applies Appendix A and is source of truth."
     },
     "source_sample_rate": {
       "type": "integer",

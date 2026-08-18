@@ -34,9 +34,12 @@ if str(ENGINE_DIR) not in sys.path:
 
 from perfectvoice_engine.cache import compute_input_hash, file_id_from_path  # noqa: E402
 from perfectvoice_engine.constants import JobCancelled  # noqa: E402
+from perfectvoice_engine.enhance import EnhancerNotInstalled  # noqa: E402
 from perfectvoice_engine.ffmpeg_io import (  # noqa: E402
     BWF_ORIGINATOR,
     FFmpegError,
+    expected_output_sample_count,
+    extract_with_handles,
     ffmpeg_bin,
     inspect_wav,
 )
@@ -132,6 +135,7 @@ def _job_payload(
     file_duration_seconds: float = 2.0,
     handles_seconds: float = 0.5,
     use_cache: bool = True,
+    enhancer: str = "none",
 ) -> dict:
     clip = _load_fixture("clip.valid.json")
     params = _load_fixture("params.valid.json")
@@ -147,6 +151,7 @@ def _job_payload(
     params["output_dir"] = output_dir
     params["allowed_roots"] = list(allowed_roots)
     params["use_cache"] = use_cache
+    params["enhancer"] = enhancer
     return {
         "clips": [clip],
         "params": params,
@@ -177,6 +182,9 @@ class FakeSeparator:
         if hasattr(arr, "numpy"):
             arr = arr.numpy()
         arr = np.asarray(arr, dtype=np.float32)
+        callback = self.kwargs.get("callback")
+        if callable(callback):
+            callback({"segment_offset": 0, "audio_length": int(arr.shape[-1])})
         vocals = arr * np.float32(0.5)
         return arr, {"vocals": vocals, "drums": arr * 0.0, "bass": arr * 0.0, "other": arr * 0.0}
 
@@ -378,8 +386,10 @@ class JobPipelineTests(unittest.TestCase):
         self.assertEqual(row["handles_left_actual"], 0.2)
         self.assertEqual(row["handles_right_actual"], 0.5)
         self.assertEqual(row["wet_dry_sample_rate"], 44100)
-        self.assertGreater(row["output_samples"], 0)
+        expected_n = expected_output_sample_count(0.2, 1.2, 2.0, 48000, 0.5)
+        self.assertLessEqual(abs(int(row["output_samples"]) - expected_n), 1)
         self.assertGreaterEqual(row["peak"], 0.0)
+        self.assertIsNotNone(FakeSeparator.instances[0].kwargs.get("callback"))
         self.assertRegex(row["input_hash"], r"^[0-9a-f]{64}$")
         wav = Path(row["output_path"])
         self.assertTrue(wav.is_file())
@@ -416,6 +426,10 @@ class JobPipelineTests(unittest.TestCase):
         self.assertTrue(Path(r96[0]["output_path"]).is_file())
         self.assertEqual(inspect_wav(r48[0]["output_path"]).sample_rate, 48000)
         self.assertEqual(inspect_wav(r96[0]["output_path"]).sample_rate, 96000)
+        n48 = expected_output_sample_count(0.2, 1.2, 2.0, 48000, 0.5)
+        n96 = expected_output_sample_count(0.2, 1.2, 2.0, 96000, 0.5)
+        self.assertLessEqual(abs(int(r48[0]["output_samples"]) - n48), 1)
+        self.assertLessEqual(abs(int(r96[0]["output_samples"]) - n96), 1)
         # Identity function agrees with the pipeline.
         clip48 = self._validated(project_sample_rate=48000)["clips"][0]
         clip96 = self._validated(project_sample_rate=96000)["clips"][0]
@@ -477,6 +491,84 @@ class JobPipelineTests(unittest.TestCase):
                 engine_semver="0.1.0",
             ),
         )
+
+    def test_content_window_engine_applies_handles_once(self) -> None:
+        # Contract: source_in/out are t0/t1 in samples, not the extract window.
+        # t0=0.2, t1=1.2, H=0.5, file=2s @ 48k → H_left=0.2, extract starts at 0.
+        content = self._run()
+        self.assertEqual(content[0]["handles_left_actual"], 0.2)
+        self.assertEqual(content[0]["handles_right_actual"], 0.5)
+        # A panel that pre-added H would send source_in=0, source_out=81600
+        # and the engine would report H_left_actual=0 (clamp-at-SOF lost).
+        prehandled = self._run(
+            self._validated(source_in_sample=0, source_out_sample=81600)
+        )
+        self.assertEqual(prehandled[0]["handles_left_actual"], 0.0)
+        self.assertNotEqual(content[0]["input_hash"], prehandled[0]["input_hash"])
+
+    def test_dfn_mocked_wet_dry_48000_distinct_key(self) -> None:
+        none = self._run()
+        FakeSeparator.separate_calls = 0
+        FakeSeparator.instances.clear()
+
+        def _identity(samples: np.ndarray, sample_rate: int, **kwargs: object) -> np.ndarray:
+            self.assertEqual(int(sample_rate), 48000)
+            return np.array(samples, dtype=np.float32, copy=True)
+
+        body = self._validated(enhancer="deepfilternet3")
+        with (
+            patch("perfectvoice_engine.pipeline.is_enhancer_installed", return_value=True),
+            patch("perfectvoice_engine.blend.enhance_vocals", side_effect=_identity),
+            patch("perfectvoice_engine.separate._separator_cls", return_value=FakeSeparator),
+            patch(
+                "perfectvoice_engine.separate._to_model_input",
+                side_effect=lambda arr: np.ascontiguousarray(arr, dtype=np.float32),
+            ),
+            patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
+        ):
+            dfn = run_job(body["clips"], body["params"], body["output_dir"])
+        self.assertEqual(dfn[0]["wet_dry_sample_rate"], 48000)
+        self.assertEqual(none[0]["wet_dry_sample_rate"], 44100)
+        self.assertNotEqual(dfn[0]["input_hash"], none[0]["input_hash"])
+        self.assertEqual(FakeSeparator.separate_calls, 1)
+
+    def test_missing_dfn_zero_network_no_separator(self) -> None:
+        empty_dfn = self.tmp / "empty-dfn"
+        empty_dfn.mkdir()
+        os.environ["PERFECTVOICE_DFN_REPO"] = str(empty_dfn)
+        FakeSeparator.instances.clear()
+        FakeSeparator.separate_calls = 0
+        body = self._validated(enhancer="deepfilternet3")
+        with _block_and_record_network() as hits:
+            with patch(
+                "perfectvoice_engine.separate._separator_cls",
+                side_effect=AssertionError("Separator must not run"),
+            ):
+                with self.assertRaises(EnhancerNotInstalled) as ctx:
+                    process_clip(
+                        body["clips"][0],
+                        body["params"],
+                        output_dir=self.out,
+                    )
+        self.assertIn("enhancer not installed", str(ctx.exception).lower())
+        self.assertEqual(FakeSeparator.separate_calls, 0)
+        _assert_no_forbidden_hosts(hits)
+        self.assertEqual(hits, [])
+
+    def test_cancel_during_extract(self) -> None:
+        cancel = threading.Event()
+        cancel.set()
+        dest = self.tmp / "cancelled.wav"
+        with self.assertRaises(JobCancelled):
+            extract_with_handles(
+                self.src,
+                dest,
+                t0=0.2,
+                t1=1.2,
+                handle_s=0.5,
+                cancel_event=cancel,
+            )
+        self.assertFalse(dest.exists())
 
     def test_missing_model_zero_network(self) -> None:
         empty = self.tmp / "empty-repo"

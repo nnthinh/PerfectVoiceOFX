@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from perfectvoice_engine.constants import raise_if_cancelled
 from perfectvoice_engine.enhance import enhance as enhance_vocals
 from perfectvoice_engine.ffmpeg_io import (
     BWF_ORIGINATOR,
@@ -185,6 +186,7 @@ def blend(
     wet: float = DEFAULT_WET,
     gain_db: float = DEFAULT_GAIN_DB,
     mono: bool = False,
+    cancel_event: object | None = None,
 ) -> BlendResult:
     """Resample to wet/dry rate, mix, gain, optional mono, then project rate.
 
@@ -204,7 +206,9 @@ def blend(
     x = to_wet_dry_rate(dry, in_sample_rate, enhancer)
     v = to_wet_dry_rate(vocals, in_sample_rate, enhancer)
     if enhancer == ENHANCER_DEEPFILTERNET3:
+        raise_if_cancelled(cancel_event)
         v = enhance_vocals(v, wd_sr)
+        raise_if_cancelled(cancel_event)
 
     y = wet_dry_mix(x, v, wet=w)
     y, _ = _as_frames(y)
@@ -244,6 +248,7 @@ def blend_to_wav(
     gain_db: float = DEFAULT_GAIN_DB,
     mono: bool = False,
     sample_format: str = "pcm24",
+    cancel_event: object | None = None,
 ) -> BlendResult:
     """Blend then write pcm24/float32 WAV via ``ffmpeg_io.write_wav`` (BWF)."""
     result = blend(
@@ -255,13 +260,16 @@ def blend_to_wav(
         wet=wet,
         gain_db=gain_db,
         mono=mono,
+        cancel_event=cancel_event,
     )
+    raise_if_cancelled(cancel_event)
     info: WavInfo = write_wav(
         dest,
         result.samples,
         result.project_sample_rate,
         sample_format=sample_format,
         originator=BWF_ORIGINATOR,
+        cancel_event=cancel_event,
     )
     return BlendResult(
         samples=result.samples,

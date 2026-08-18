@@ -24,6 +24,11 @@ from perfectvoice_engine.cache import (
     file_id_from_path,
 )
 from perfectvoice_engine.constants import raise_if_cancelled
+from perfectvoice_engine.enhance import (
+    ENHANCER_ID as DFN_ENHANCER_ID,
+    EnhancerNotInstalled,
+    is_enhancer_installed,
+)
 from perfectvoice_engine.ffmpeg_io import decode_f32, extract_with_handles
 from perfectvoice_engine.models import (
     VOCALS_ONLY_SIG,
@@ -44,6 +49,14 @@ def job_model_name(params: Mapping[str, Any]) -> str:
     if params.get("vocals_only_bag"):
         return VOCALS_ONLY_SIG
     return str(params["model"])
+
+
+def _require_enhancer(params: Mapping[str, Any]) -> None:
+    """Fail closed before infer if DFN was requested but is not installed."""
+    if str(params.get("enhancer")) != DFN_ENHANCER_ID:
+        return
+    if not is_enhancer_installed():
+        raise EnhancerNotInstalled()
 
 
 def clip_input_hash(
@@ -124,6 +137,7 @@ def _read_meta(path: Path) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         return None
     required = (
+        "input_hash",
         "handles_left_actual",
         "handles_right_actual",
         "wet_dry_sample_rate",
@@ -140,6 +154,7 @@ def _write_meta(path: Path, result: Mapping[str, Any]) -> None:
     path.write_text(
         json.dumps(
             {
+                "input_hash": result["input_hash"],
                 "handles_left_actual": result["handles_left_actual"],
                 "handles_right_actual": result["handles_right_actual"],
                 "wet_dry_sample_rate": result["wet_dry_sample_rate"],
@@ -172,6 +187,8 @@ def _cache_lookup(
     meta = _read_meta(cached.with_name(META_JSON))
     if meta is None or not cached.is_file():
         return None
+    if str(meta.get("input_hash")) != input_hash:
+        return None
     _copy_wav(cached, dest)
     return meta
 
@@ -184,7 +201,8 @@ def _cache_store(
 ) -> None:
     if index is None:
         return
-    cache_wav = default_cache_dir() / clip_hash12(input_hash) / VOICE_WAV
+    # Full hash so a 12-hex dest prefix collision cannot clobber another identity.
+    cache_wav = default_cache_dir() / input_hash / VOICE_WAV
     _copy_wav(dest, cache_wav)
     _write_meta(cache_wav.with_name(META_JSON), result)
     index.put(input_hash, cache_wav)
@@ -239,12 +257,26 @@ def process_clip(
 
     if not model_checked:
         require_model(name, repo)
+    _require_enhancer(params)
 
     raise_if_cancelled(cancel_event)
     src_sr = int(clip["source_sample_rate"])
-    # Panel source_in/out are the content window. Engine applies Appendix A.
+    # clip.v1 source_in/out are content t0/t1 in samples — not the extract
+    # window. Engine applies Appendix A once; the panel must not pre-add H.
     t0 = float(clip["source_in_sample"]) / float(src_sr)
     t1 = float(clip["source_out_sample"]) / float(src_sr)
+
+    def _fwd_progress(info: Mapping[str, Any]) -> None:
+        if on_progress is None:
+            return
+        on_progress(
+            {
+                "clip_id": clip_id,
+                "segment_offset": info.get("segment_offset", 0),
+                "audio_length": info.get("audio_length", 0),
+            }
+        )
+
     tmp = Path(tempfile.mkdtemp(prefix="pv-clip-"))
     try:
         extract_path = tmp / "extract.wav"
@@ -258,9 +290,10 @@ def process_clip(
             stream_index=int(clip["audio_stream_index"]),
             file_dur=float(clip["file_duration_seconds"]),
             source_sample_rate=src_sr,
+            cancel_event=cancel_event,
         )
         raise_if_cancelled(cancel_event)
-        frames, _probe = decode_f32(extract_path)
+        frames, _probe = decode_f32(extract_path, cancel_event=cancel_event)
         frames = _apply_channel_map(frames, clip["channel_map"])
         model_frames = to_model_rate(frames, extracted.sample_rate)
         wav_ct = np.ascontiguousarray(model_frames.T, dtype=np.float32)
@@ -275,6 +308,7 @@ def process_clip(
                 shifts=int(params["shifts"]),
                 vocals_only_bag=bool(params["vocals_only_bag"]),
                 cancel_event=cancel_event,
+                on_progress=_fwd_progress if on_progress is not None else None,
             ),
             repo,
         )
@@ -291,6 +325,7 @@ def process_clip(
             gain_db=float(params["output_gain_db"]),
             mono=bool(params["mono"]),
             sample_format=str(params["sample_format"]),
+            cancel_event=cancel_event,
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

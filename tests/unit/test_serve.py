@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -84,6 +85,13 @@ class _RunningEngine:
         env["PYTHONPATH"] = str(ENGINE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
         env["PYTHONUNBUFFERED"] = "1"
         env["PERFECTVOICE_STUB_HOLD"] = hold
+        # Pin an empty local repo so a developer machine with installed
+        # weights cannot skip the Model-not-installed fail-closed path.
+        self._model_tmp = Path(tempfile.mkdtemp(prefix="pv-empty-demucs-"))
+        empty_repo = self._model_tmp / "repo"
+        empty_repo.mkdir()
+        env["PERFECTVOICE_DEMUCS_REPO"] = str(empty_repo)
+        env["PERFECTVOICE_MANIFEST"] = str(ENGINE_DIR / "models" / "manifest.json")
         cmd = [
             sys.executable,
             "-u",
@@ -211,6 +219,9 @@ class _RunningEngine:
                 except OSError:
                     pass
         self._err_thread.join(timeout=1)
+        model_tmp = getattr(self, "_model_tmp", None)
+        if model_tmp is not None:
+            shutil.rmtree(model_tmp, ignore_errors=True)
 
 
 def _run_cli(bind: str, extra: list[str] | None = None, timeout: float = 5.0) -> subprocess.CompletedProcess[str]:
