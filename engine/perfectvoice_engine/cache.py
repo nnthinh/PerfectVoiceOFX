@@ -100,6 +100,9 @@ _STR_FIELDS = frozenset(
     }
 )
 
+# file_index / ino / size / mtime_ns are unsigned 64-bit on the OS side.
+_UINT64_MAX = (1 << 64) - 1
+
 
 class CacheError(ValueError):
     """Identity field is missing, mistyped, or not allowed as a client input."""
@@ -281,7 +284,7 @@ def _normalize_field(name: str, value: object) -> object:
 def _normalize_file_id(value: object) -> tuple[int, int, int, int]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise CacheError("file_id must be a 4-int sequence")
-    parts = tuple(int(part) for part in value)
+    parts = tuple(_as_int("file_id[]", part) for part in value)
     if len(parts) != 4:
         raise CacheError("file_id must be (dev|volume, ino|index, size, mtime)")
     return parts
@@ -309,7 +312,10 @@ def _as_int(name: str, value: object) -> int:
     # bool is int; a True vocals flag must not silently become src_in=1.
     if isinstance(value, bool) or not isinstance(value, int):
         raise CacheError(f"{name} must be int, got {type(value).__name__}")
-    return int(value)
+    number = int(value)
+    if number < 0 or number > _UINT64_MAX:
+        raise CacheError(f"{name} out of uint64 range: {number}")
+    return number
 
 
 def _as_float(name: str, value: object) -> float:
@@ -322,11 +328,18 @@ def _encode_named(name: str, value: object) -> bytes:
     return name.encode("ascii") + b"\0" + _encode_value(value)
 
 
+def _pack_u64(value: int) -> bytes:
+    try:
+        return struct.pack(">Q", value)
+    except struct.error as exc:
+        raise CacheError(f"integer out of uint64 range: {value}") from exc
+
+
 def _encode_value(value: object) -> bytes:
     if isinstance(value, bool):
         return b"B" + (b"\x01" if value else b"\x00")
     if isinstance(value, int):
-        return b"I" + struct.pack(">q", value)
+        return b"I" + _pack_u64(value)
     if isinstance(value, float):
         return b"F" + struct.pack(">d", value)
     if isinstance(value, str):
@@ -334,7 +347,7 @@ def _encode_value(value: object) -> bytes:
         return b"S" + struct.pack(">I", len(payload)) + payload
     if isinstance(value, tuple):
         if all(isinstance(item, int) and not isinstance(item, bool) for item in value):
-            body = b"".join(struct.pack(">q", item) for item in value)
+            body = b"".join(_pack_u64(item) for item in value)
             return b"T" + struct.pack(">I", len(value)) + body
     raise CacheError(f"cannot encode {type(value).__name__}")
 
@@ -448,7 +461,8 @@ class CacheIndex:
         self.close()
 
     def put(self, input_hash: str, path: str | os.PathLike[str]) -> CacheEntry:
-        resolved = os.fspath(path)
+        # Persist an absolute path so a later cwd change (sidecar cwd=engineDir) cannot miss.
+        resolved = str(Path(path).resolve())
         st = os.stat(resolved)
         entry = CacheEntry(
             input_hash=str(input_hash).lower(),

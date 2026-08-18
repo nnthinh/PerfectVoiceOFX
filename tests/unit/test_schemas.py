@@ -8,6 +8,7 @@ Run:     python3 -m unittest tests/unit/test_schemas.py
 from __future__ import annotations
 
 import json
+import sys
 import unittest
 from pathlib import Path
 
@@ -16,33 +17,13 @@ from jsonschema.exceptions import ValidationError
 from referencing import Registry, Resource
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+ENGINE_DIR = REPO_ROOT / "engine"
 SCHEMA_DIR = REPO_ROOT / "shared" / "schema"
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "schemas"
+if str(ENGINE_DIR) not in sys.path:
+    sys.path.insert(0, str(ENGINE_DIR))
 
-HASH_FIELDS = (
-    "file_id",
-    "src_in",
-    "src_out",
-    "audio_stream_index",
-    "channel_map",
-    "model_name",
-    "weights_sha256",
-    "vocals_only_bag",
-    "wet",
-    "gain",
-    "mono",
-    "handles_requested",
-    "file_duration_seconds",
-    "segment",
-    "overlap",
-    "shifts",
-    "enhancer_id",
-    "project_sample_rate",
-    "sample_format",
-    "resampler_id",
-    "clip_policy",
-    "engine_semver",
-)
+from perfectvoice_engine.cache import HASH_FIELDS  # noqa: E402
 
 
 def _load_json(path: Path) -> object:

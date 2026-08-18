@@ -5,6 +5,7 @@ Run: python3 -m unittest tests.unit.test_cache
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -117,6 +118,12 @@ class ComputeInputHashTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertNotEqual(baseline, _hash(**{name: value}), name)
 
+    def test_hash_fields_match_schema_required_order(self) -> None:
+        schema_path = REPO_ROOT / "shared" / "schema" / "hash-fields.v1.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertEqual(HASH_FIELDS, tuple(schema["required"]))
+        self.assertEqual(set(schema["properties"]), set(HASH_FIELDS))
+
     def test_handles_actual_is_not_an_identity_field(self) -> None:
         with self.assertRaises(TypeError):
             compute_input_hash(  # type: ignore[call-arg]
@@ -142,6 +149,24 @@ class ComputeInputHashTests(unittest.TestCase):
     def test_clip_hash12(self) -> None:
         digest = _hash()
         self.assertEqual(clip_hash12(digest), digest[:12])
+
+    def test_uint64_file_index_hashes_stably(self) -> None:
+        high = 1 << 63
+        key = _hash(file_id=(1, high, 3, 4))
+        self.assertEqual(key, _hash(file_id=(1, high, 3, 4)))
+        self.assertNotEqual(key, _hash(file_id=(1, high - 1, 3, 4)))
+
+    def test_file_id_rejects_bool_and_float(self) -> None:
+        with self.assertRaises(CacheError):
+            _hash(file_id=(True, 2, 3, 4))
+        with self.assertRaises(CacheError):
+            _hash(file_id=(1.0, 2, 3, 4))
+
+    def test_int_out_of_uint64_raises_cache_error(self) -> None:
+        with self.assertRaises(CacheError):
+            _hash(file_id=(1, 1 << 64, 3, 4))
+        with self.assertRaises(CacheError):
+            _hash(src_in=-1)
 
 
 class FileIdTests(unittest.TestCase):
@@ -192,9 +217,28 @@ class CacheIndexTests(unittest.TestCase):
                 self.assertIsNotNone(hit)
                 assert hit is not None
                 self.assertEqual(hit.input_hash, digest)
-                self.assertEqual(hit.path, str(artifact))
+                self.assertEqual(hit.path, str(artifact.resolve()))
                 artifact.write_bytes(b"wav-changed")
                 self.assertIsNone(index.get(digest))
+
+    def test_put_resolves_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "voice.wav"
+            artifact.write_bytes(b"wav")
+            digest = _hash()
+            cwd = os.getcwd()
+            try:
+                os.chdir(root)
+                with CacheIndex(root / "cache-index.sqlite") as index:
+                    index.put(digest, "voice.wav")
+                    os.chdir(cwd)
+                    hit = index.get(digest)
+                    self.assertIsNotNone(hit)
+                    assert hit is not None
+                    self.assertEqual(hit.path, str(artifact.resolve()))
+            finally:
+                os.chdir(cwd)
 
 
 if __name__ == "__main__":
