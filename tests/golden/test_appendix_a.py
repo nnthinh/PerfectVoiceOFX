@@ -92,6 +92,48 @@ class AppendixAClampTests(unittest.TestCase):
         self.assertLessEqual(abs(int(row["output_samples"]) - expected), 1)
         self.assertEqual(inspect_wav(row["output_path"]).sample_count, row["output_samples"])
 
+    def test_96k_source_scaled_in_out(self) -> None:
+        # Do not reuse 48 kHz sample-index constants on the 96 kHz fixture.
+        src = self.paths["sine_96k_stereo.wav"]
+        src_sr = 96000
+        source_in = round_half_up(T0 * src_sr)
+        source_out = round_half_up(T1 * src_sr)
+        self.assertEqual(source_in, 19200)
+        self.assertEqual(source_out, 115200)
+        dest = self.tmp / "extract_96k.wav"
+        result = extract_with_handles(
+            src,
+            dest,
+            t0=T0,
+            t1=T1,
+            handle_s=HANDLE_S,
+            sample_format="pcm24",
+            source_sample_rate=src_sr,
+            file_dur=FILE_DUR,
+        )
+        self.assertAlmostEqual(result.extract.h_left_actual, 0.2)
+        self.assertAlmostEqual(result.extract.h_right_actual, 0.5)
+        self.assertEqual(result.extract.src_in_sample, 0)
+        self.assertEqual(result.sample_count, 163200)
+        with identity_pipeline(self.tmp):
+            row = run_clip(
+                job_body(
+                    src,
+                    self.out,
+                    self.roots,
+                    source_in_sample=source_in,
+                    source_out_sample=source_out,
+                    source_sample_rate=src_sr,
+                    project_sample_rate=src_sr,
+                    file_duration_seconds=FILE_DUR,
+                )
+            )
+        self.assertEqual(row["handles_left_actual"], 0.2)
+        self.assertEqual(row["handles_right_actual"], 0.5)
+        expected = expected_output_sample_count(T0, T1, FILE_DUR, src_sr, HANDLE_S)
+        self.assertEqual(expected, 163200)
+        self.assertLessEqual(abs(int(row["output_samples"]) - expected), 1)
+
     def test_five_synthetic_clips_are_short(self) -> None:
         # Guardrail: suite stays in-test and tiny (no committed footage).
         self.assertEqual(len(self.paths), 5)

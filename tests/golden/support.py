@@ -26,6 +26,7 @@ from perfectvoice_engine.ffmpeg_io import (  # noqa: E402
 )
 from perfectvoice_engine.models import DEFAULT_MODEL  # noqa: E402
 from perfectvoice_engine.pipeline import run_job  # noqa: E402
+from perfectvoice_engine.resample import MODEL_SAMPLE_RATE, resample_array  # noqa: E402
 
 # Appendix A required fixture (seconds @ 48 kHz).
 T0 = 0.2
@@ -124,7 +125,7 @@ def generate_suite(root: Path) -> dict[str, Path]:
         ("impulse_48k_stereo.wav", impulse_frames(FILE_DUR, SRC_SR, IMPULSE_AT), SRC_SR),
         ("click_train_48k.wav", click_train_frames(FILE_DUR, SRC_SR), SRC_SR),
         ("speech_plus_bed_48k.wav", speech_plus_bed_frames(FILE_DUR, SRC_SR), SRC_SR),
-        ("sine_96k_stereo.wav", sine_frames(1.0, 96000), 96000),
+        ("sine_96k_stereo.wav", sine_frames(FILE_DUR, 96000), 96000),
     ]
     paths: dict[str, Path] = {}
     for name, frames, sr in specs:
@@ -246,15 +247,15 @@ def run_clip(body: dict[str, Any]) -> dict[str, Any]:
     return run_job(body["clips"], body["params"], body["output_dir"])[0]
 
 
+def _mono(x: np.ndarray) -> np.ndarray:
+    arr = np.asarray(x, dtype=np.float64)
+    if arr.ndim == 2:
+        arr = arr.mean(axis=1)
+    return np.ascontiguousarray(arr)
+
+
 def lag_samples(a: np.ndarray, b: np.ndarray) -> int:
     """Integer lag of ``a`` vs ``b`` (positive = ``a`` late). Uses mono mix."""
-
-    def _mono(x: np.ndarray) -> np.ndarray:
-        arr = np.asarray(x, dtype=np.float64)
-        if arr.ndim == 2:
-            arr = arr.mean(axis=1)
-        return np.ascontiguousarray(arr)
-
     xa, xb = _mono(a), _mono(b)
     n = max(xa.size, xb.size)
     if xa.size < n:
@@ -263,3 +264,40 @@ def lag_samples(a: np.ndarray, b: np.ndarray) -> int:
         xb = np.pad(xb, (0, n - xb.size))
     corr = np.correlate(xa, xb, mode="full")
     return int(np.argmax(corr) - (n - 1))
+
+
+def align_and_pearson(a: np.ndarray, b: np.ndarray) -> tuple[int, float]:
+    """Lag of ``a`` vs ``b``, then Pearson r after cropping that shift."""
+    lag = lag_samples(a, b)
+    xa, xb = _mono(a), _mono(b)
+    if lag > 0:
+        xa = xa[lag:]
+    elif lag < 0:
+        xb = xb[-lag:]
+    n = min(xa.size, xb.size)
+    xa, xb = xa[:n], xb[:n]
+    if n < 2 or float(xa.std()) == 0.0 or float(xb.std()) == 0.0:
+        return lag, 0.0
+    return lag, float(np.corrcoef(xa, xb)[0, 1])
+
+
+def rms_ratio(a: np.ndarray, b: np.ndarray) -> float:
+    """RMS(a)/RMS(b) after aligning. Pearson is scale-blind; this is not."""
+    lag = lag_samples(a, b)
+    xa, xb = _mono(a), _mono(b)
+    if lag > 0:
+        xa = xa[lag:]
+    elif lag < 0:
+        xb = xb[-lag:]
+    n = min(xa.size, xb.size)
+    xa, xb = xa[:n], xb[:n]
+    denom = float(np.sqrt(np.mean(xb * xb)))
+    if denom == 0.0:
+        return 0.0
+    return float(np.sqrt(np.mean(xa * xa)) / denom)
+
+
+def soxr_roundtrip(frames: np.ndarray, sample_rate: int, project_rate: int) -> np.ndarray:
+    """Same 48→44.1→project trip the identity pipeline applies to extract."""
+    mid = resample_array(frames, sample_rate, MODEL_SAMPLE_RATE)
+    return resample_array(mid, MODEL_SAMPLE_RATE, project_rate)

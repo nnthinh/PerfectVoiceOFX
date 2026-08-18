@@ -11,6 +11,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
 
 GOLDEN_DIR = Path(__file__).resolve().parent
 if str(GOLDEN_DIR) not in sys.path:
@@ -91,6 +94,27 @@ class CacheKeyPairTests(unittest.TestCase):
         self.assertFalse(f32["cache_hit"])
         self.assertEqual(inspect_wav(pcm["output_path"]).sample_format, "pcm24")
         self.assertEqual(inspect_wav(f32["output_path"]).sample_format, "float32")
+        self.assertEqual(IdentitySeparator.separate_calls, 2)
+
+    def test_none_vs_dfn3_two_keys(self) -> None:
+        def _identity(samples: np.ndarray, sample_rate: int, **kwargs: object) -> np.ndarray:
+            self.assertEqual(int(sample_rate), 48000)
+            return np.array(samples, dtype=np.float32, copy=True)
+
+        with identity_pipeline(self.tmp):
+            none = run_clip(job_body(self.src, self.out, self.roots, enhancer="none"))
+            with (
+                patch("perfectvoice_engine.pipeline.is_enhancer_installed", return_value=True),
+                patch("perfectvoice_engine.blend.enhance_vocals", side_effect=_identity),
+            ):
+                dfn = run_clip(
+                    job_body(self.src, self.out, self.roots, enhancer="deepfilternet3")
+                )
+        self.assertNotEqual(none["input_hash"], dfn["input_hash"])
+        self.assertEqual(none["wet_dry_sample_rate"], 44100)
+        self.assertEqual(dfn["wet_dry_sample_rate"], 48000)
+        self.assertFalse(none["cache_hit"])
+        self.assertFalse(dfn["cache_hit"])
         self.assertEqual(IdentitySeparator.separate_calls, 2)
 
     def test_same_identity_is_cache_hit(self) -> None:

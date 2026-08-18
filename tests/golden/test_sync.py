@@ -26,12 +26,15 @@ from support import (  # noqa: E402
     T0,
     T1,
     IdentitySeparator,
+    align_and_pearson,
     generate_suite,
     have_ffmpeg,
     identity_pipeline,
     job_body,
     lag_samples,
+    rms_ratio,
     run_clip,
+    soxr_roundtrip,
 )
 
 from perfectvoice_engine.ffmpeg_io import decode_f32, extract_with_handles  # noqa: E402
@@ -56,6 +59,30 @@ class IsolatedVsExtractSyncTests(unittest.TestCase):
             src, dest, t0=T0, t1=T1, handle_s=HANDLE_S, sample_format="float32"
         )
 
+    def _assert_same_in_out(
+        self,
+        isolated: np.ndarray,
+        extract_frames: np.ndarray,
+        *,
+        min_r: float = 0.99,
+        via_soxr: bool = False,
+    ) -> int:
+        # Lag vs the raw extract is the sync contract. Pearson vs that
+        # extract (or its soxr 48→44.1→48 trip for clicks) plus RMS
+        # ratio catch a 0.5× stem or a different same-length waveform.
+        self.assertLessEqual(abs(isolated.shape[0] - extract_frames.shape[0]), 1)
+        self.assertLessEqual(abs(lag_samples(isolated, extract_frames)), 1)
+        ref = (
+            soxr_roundtrip(extract_frames, SRC_SR, SRC_SR)
+            if via_soxr
+            else extract_frames
+        )
+        lag, r = align_and_pearson(isolated, ref)
+        self.assertLessEqual(abs(lag), 1)
+        self.assertGreater(r, min_r)
+        self.assertAlmostEqual(rms_ratio(isolated, ref), 1.0, delta=0.05)
+        return lag
+
     def test_sine_lag_le_one_sample(self) -> None:
         src = self.paths["sine_48k_stereo.wav"]
         extract_path = self.tmp / "extract_sine.wav"
@@ -66,9 +93,8 @@ class IsolatedVsExtractSyncTests(unittest.TestCase):
             row = run_clip(body)
         isolated, probe = decode_f32(row["output_path"])
         self.assertEqual(probe.sample_rate, SRC_SR)
-        self.assertLessEqual(abs(isolated.shape[0] - extract_frames.shape[0]), 1)
         self.assertLessEqual(abs(int(row["output_samples"]) - extracted.sample_count), 1)
-        self.assertLessEqual(abs(lag_samples(isolated, extract_frames)), 1)
+        self._assert_same_in_out(isolated, extract_frames)
         self.assertGreaterEqual(IdentitySeparator.separate_calls, 1)
 
     def test_impulse_peak_within_one_sample(self) -> None:
@@ -82,7 +108,8 @@ class IsolatedVsExtractSyncTests(unittest.TestCase):
         isolated, _ = decode_f32(row["output_path"])
         isolated_peak = int(np.abs(isolated).sum(axis=1).argmax())
         self.assertLessEqual(abs(isolated_peak - extract_peak), 1)
-        self.assertLessEqual(abs(lag_samples(isolated, extract_frames)), 1)
+        # Soxr smears a delta; compare to the same 48→44.1→48 trip.
+        self._assert_same_in_out(isolated, extract_frames, via_soxr=True)
 
     def test_click_train_same_in_out(self) -> None:
         src = self.paths["click_train_48k.wav"]
@@ -92,8 +119,7 @@ class IsolatedVsExtractSyncTests(unittest.TestCase):
         with identity_pipeline(self.tmp):
             row = run_clip(job_body(src, self.out, self.roots, wet=1.0))
         isolated, _ = decode_f32(row["output_path"])
-        self.assertLessEqual(abs(isolated.shape[0] - extract_frames.shape[0]), 1)
-        self.assertLessEqual(abs(lag_samples(isolated, extract_frames)), 1)
+        self._assert_same_in_out(isolated, extract_frames, via_soxr=True)
 
     def test_speech_plus_bed_same_in_out(self) -> None:
         src = self.paths["speech_plus_bed_48k.wav"]
@@ -103,7 +129,7 @@ class IsolatedVsExtractSyncTests(unittest.TestCase):
         with identity_pipeline(self.tmp):
             row = run_clip(job_body(src, self.out, self.roots, wet=1.0))
         isolated, _ = decode_f32(row["output_path"])
-        self.assertLessEqual(abs(lag_samples(isolated, extract_frames)), 1)
+        self._assert_same_in_out(isolated, extract_frames)
         self.assertEqual(row["handles_left_actual"], T0)
         self.assertEqual(row["handles_right_actual"], HANDLE_S)
 
