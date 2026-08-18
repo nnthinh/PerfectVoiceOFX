@@ -191,11 +191,11 @@ Resolve 21 trên máy này **cũng** đọc plugin user-space:
 bash scripts/spikes/install-hello-wi-panel.sh
 ```
 
-Script copy `scripts/spikes/hello-wi-panel/` → `…/PerfectVoiceHelloSpike/` và lấy `WorkflowIntegration.node` từ Developer Examples (không commit `.node` — xem `docs/licenses/blackmagic.md`). `install-hello-wi-panel.sh --system` **từ chối** có chủ đích.
+Script copy `scripts/spikes/hello-wi-panel/` → `…/PerfectVoiceHelloSpike/`, lấy `WorkflowIntegration.node` từ Developer Examples (không commit `.node` — xem `docs/licenses/blackmagic.md`), và **copy/build** hello-engine vào `~/Library/Application Support/PerfectVoice/engine/perfectvoice-engine` (enginePath §3.8). Thiếu Mach-O thì in lệnh `cp`/`export PERFECTVOICE_ENGINE` rồi vẫn exit 0. `--system` **từ chối** có chủ đích.
 
 Sau đó: restart Studio → **Workspace → Workflow Integrations → PerfectVoice Hello Spike** → *Spawn hello-engine*.
 
-Cần Mach-O `scripts/spikes/hello-engine` (chạy `build-hello-engine.sh`) **hoặc** đặt binary vào `~/Library/Application Support/PerfectVoice/engine/perfectvoice-engine` / `PERFECTVOICE_ENGINE`. Panel resolve path theo §3.8; khi chạy *trong* Resolve, fallback `../hello-engine` chỉ đúng nếu cài cạnh `scripts/spikes/` (dev). User-space copy nên set `PERFECTVOICE_ENGINE` hoặc thả binary vào `~/Library/Application Support/PerfectVoice/engine/perfectvoice-engine`.
+Panel resolve path theo §3.8. Fallback `scripts/spikes/hello-engine` **chỉ** khi file panel còn nằm dưới `scripts/spikes/hello-wi-panel` (dev). Bản cài user-space không dò `../hello-engine`.
 
 Chưa chạy install trên máy spike này (tránh thêm plugin vào menu Resolve của user). Spawn đã chứng minh bằng Electron binary của Resolve.
 

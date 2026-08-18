@@ -27,12 +27,67 @@ const READY_RE = /^READY (http:\/\/127\.0\.0\.1:\d+)\s*$/;
 const FAIL_CLOSED =
   "Cannot start engine (spawn blocked or not installed). Need Studio standalone + a codesigned engine.";
 
+// Absolute only — never PATH. PERFECTVOICE_PYTHON wins when set.
+const PYTHON_CANDIDATES = [
+  "/usr/bin/python3",
+  "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+  "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+  "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+  "/opt/homebrew/bin/python3",
+];
+
 function existsFile(p) {
   try {
     return fs.statSync(p).isFile();
   } catch {
     return false;
   }
+}
+
+function unlinkIfPresent(p) {
+  if (!p) return;
+  try {
+    fs.unlinkSync(p);
+  } catch (err) {
+    if (!err || err.code !== "ENOENT") throw err;
+  }
+}
+
+function killChild(child) {
+  if (!child || child.exitCode !== null) return;
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // already gone
+  }
+}
+
+function killChildHard(child) {
+  killChild(child);
+  if (!child || child.exitCode !== null) return;
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // ignore
+  }
+}
+
+function stopChild(child) {
+  if (!child || child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    child.once("exit", finish);
+    killChild(child);
+    setTimeout(() => {
+      killChildHard(child);
+      setTimeout(finish, 250);
+    }, 1000);
+  });
 }
 
 function resolveEnginePath() {
@@ -65,6 +120,21 @@ function assertAbsolute(p, label) {
   }
 }
 
+function resolvePython() {
+  const env = process.env.PERFECTVOICE_PYTHON;
+  if (env) {
+    assertAbsolute(env, "PERFECTVOICE_PYTHON");
+    if (!existsFile(env)) {
+      throw new Error(`PERFECTVOICE_PYTHON not found: ${env}`);
+    }
+    return env;
+  }
+  for (const c of PYTHON_CANDIDATES) {
+    if (existsFile(c)) return c;
+  }
+  throw new Error("no absolute python3 found; set PERFECTVOICE_PYTHON");
+}
+
 function writeTokenFile() {
   const runDir = path.join(
     os.homedir(),
@@ -77,7 +147,9 @@ function writeTokenFile() {
   return { tokenPath, token };
 }
 
-function failClosed(err) {
+function failClosed(err, child, tokenPath) {
+  unlinkIfPresent(tokenPath);
+  killChildHard(child);
   const code = err && err.code;
   console.error(FAIL_CLOSED);
   console.error(`spawn error: ${code || ""} ${err && err.message ? err.message : err}`);
@@ -125,14 +197,7 @@ function spawnEngine(absEnginePath, tokenPath) {
   let cmd = absEnginePath;
   let cmdArgs = args;
   if (absEnginePath.endsWith(".py")) {
-    // Interpreter must also be absolute — still no PATH lookup.
-    const py =
-      process.env.PERFECTVOICE_PYTHON ||
-      "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3";
-    assertAbsolute(py, "python");
-    if (!existsFile(py)) {
-      throw new Error(`python interpreter not found: ${py}`);
-    }
+    const py = resolvePython();
     cmd = py;
     cmdArgs = [absEnginePath, ...args];
   }
@@ -140,7 +205,7 @@ function spawnEngine(absEnginePath, tokenPath) {
   console.error(`spawn ${cmd} ${cmdArgs.join(" ")}`);
   console.error(`cwd    ${engineDir}`);
 
-  const child = spawn(cmd, cmdArgs, {
+  return spawn(cmd, cmdArgs, {
     cwd: engineDir,
     env: {
       PATH: "",
@@ -149,45 +214,18 @@ function spawnEngine(absEnginePath, tokenPath) {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  return child;
 }
 
-async function main() {
-  const absEnginePath = resolveEnginePath();
-  if (!absEnginePath) {
-    console.error("engine not found. Build scripts/spikes/hello-engine or set PERFECTVOICE_ENGINE.");
-    process.exit(1);
-  }
-  const { tokenPath, token } = writeTokenFile();
-  let child;
-  try {
-    child = spawnEngine(absEnginePath, tokenPath);
-  } catch (err) {
-    if (err && (err.code === "EPERM" || err.code === "EACCES")) {
-      failClosed(err);
-    }
-    throw err;
-  }
-
-  child.on("error", (err) => {
-    if (err && (err.code === "EPERM" || err.code === "EACCES")) {
-      failClosed(err);
-    }
-    console.error(`spawn error: ${err.message}`);
-    process.exit(1);
-  });
-
-  let stderrBuf = "";
-  child.stderr.on("data", (c) => {
-    stderrBuf += c.toString("utf8");
-    process.stderr.write(c);
-  });
-
-  const readyUrl = await new Promise((resolve, reject) => {
+function waitReady(child, stderrRef) {
+  return new Promise((resolve, reject) => {
     let buf = "";
     const timer = setTimeout(() => {
-      reject(new Error(`timeout waiting for READY\nstderr:\n${stderrBuf}`));
+      reject(new Error(`timeout waiting for READY\nstderr:\n${stderrRef.buf}`));
     }, 8000);
+    const onExit = (code, signal) => {
+      clearTimeout(timer);
+      reject(new Error(`engine exited ${code} signal=${signal}\nstderr:\n${stderrRef.buf}`));
+    };
     child.stdout.on("data", (chunk) => {
       buf += chunk.toString("utf8");
       const lines = buf.split(/\n/);
@@ -196,58 +234,81 @@ async function main() {
         const m = READY_RE.exec(line);
         if (m) {
           clearTimeout(timer);
+          child.removeListener("exit", onExit);
           resolve(m[1]);
         }
       }
     });
-    child.on("exit", (code, signal) => {
-      clearTimeout(timer);
-      reject(new Error(`engine exited ${code} signal=${signal}\nstderr:\n${stderrBuf}`));
-    });
+    child.on("exit", onExit);
   });
-
-  console.log(`ready ${readyUrl}`);
-  const health = await getHealth(readyUrl, token);
-  console.log(`health ${health.status} ${health.body}`);
-  if (health.status !== 200) {
-    child.kill("SIGTERM");
-    process.exit(1);
-  }
-  const parsed = JSON.parse(health.body);
-  if (parsed.ok !== true || parsed.protocol_version !== 1) {
-    child.kill("SIGTERM");
-    console.error("unexpected health payload");
-    process.exit(1);
-  }
-  if (existsFile(tokenPath)) {
-    console.error("token file still present after READY (engine should unlink)");
-    child.kill("SIGTERM");
-    process.exit(1);
-  }
-  try {
-    child.kill("SIGTERM");
-  } catch {
-    // already gone
-  }
-  const exited = await Promise.race([
-    new Promise((r) => child.once("exit", () => r(true))),
-    new Promise((r) => setTimeout(() => r(false), 1000)),
-  ]);
-  if (!exited) {
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      // ignore
-    }
-  }
-  console.log("ok unsigned-or-local spawn + /v1/health");
-  process.exit(0);
 }
 
-main().catch((err) => {
-  if (err && (err.code === "EPERM" || err.code === "EACCES")) {
-    failClosed(err);
+async function main() {
+  const absEnginePath = resolveEnginePath();
+  if (!absEnginePath) {
+    console.error("engine not found. Build scripts/spikes/hello-engine or set PERFECTVOICE_ENGINE.");
+    process.exit(1);
   }
-  console.error(err && err.stack ? err.stack : err);
-  process.exit(1);
-});
+
+  let tokenPath = null;
+  let child = null;
+  try {
+    const written = writeTokenFile();
+    tokenPath = written.tokenPath;
+    const token = written.token;
+
+    try {
+      child = spawnEngine(absEnginePath, tokenPath);
+    } catch (err) {
+      if (err && (err.code === "EPERM" || err.code === "EACCES")) {
+        failClosed(err, child, tokenPath);
+      }
+      throw err;
+    }
+
+    const spawnFailed = new Promise((_, reject) => {
+      child.on("error", (err) => {
+        if (err && (err.code === "EPERM" || err.code === "EACCES")) {
+          failClosed(err, child, tokenPath);
+        }
+        reject(err);
+      });
+    });
+
+    let stderrBuf = { buf: "" };
+    child.stderr.on("data", (c) => {
+      stderrBuf.buf += c.toString("utf8");
+      process.stderr.write(c);
+    });
+
+    const readyUrl = await Promise.race([waitReady(child, stderrBuf), spawnFailed]);
+    console.log(`ready ${readyUrl}`);
+    const health = await getHealth(readyUrl, token);
+    console.log(`health ${health.status} ${health.body}`);
+    if (health.status !== 200) {
+      throw new Error(`health status ${health.status}: ${health.body}`);
+    }
+    const parsed = JSON.parse(health.body);
+    if (parsed.ok !== true || parsed.protocol_version !== 1) {
+      throw new Error("unexpected health payload");
+    }
+    if (existsFile(tokenPath)) {
+      throw new Error("token file still present after READY (engine should unlink)");
+    }
+    tokenPath = null;
+    console.log("ok unsigned-or-local spawn + /v1/health");
+  } finally {
+    await stopChild(child);
+    unlinkIfPresent(tokenPath);
+  }
+}
+
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    if (err && (err.code === "EPERM" || err.code === "EACCES")) {
+      failClosed(err);
+    }
+    console.error(err && err.stack ? err.stack : err);
+    process.exit(1);
+  });
