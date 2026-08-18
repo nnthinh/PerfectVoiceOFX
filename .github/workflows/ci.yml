@@ -31,4 +31,4 @@ jobs:
       - name: Engine Separator local-repo tests
         run: |
           python3 -m pip install --user 'numpy>=1.24'
-          python3 -m unittest tests.unit.test_separate
+          python3 -m unittest tests.unit.test_separate tests.unit.test_isolate_cli
