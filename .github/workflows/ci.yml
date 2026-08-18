@@ -1,0 +1,16 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    name: URL gate and compile
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbid official Demucs remotes in load/infer/panel paths
+        run: bash scripts/ci_forbid_demucs_urls.sh
+      - name: Compile engine package
+        run: python3 -m compileall -q engine/perfectvoice_engine

@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Local env / secrets
+.env
+.env.*
+*.token
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Weights — never commit checkpoints
+*.bin
+*.safetensors
+*.th
+engine/models/**/*.bin
+engine/models/**/*.safetensors
+engine/models/**/*.th
+
+# Resolve Workflow Integration native addon (copy-from-host; often large)
+*.node
+host/**/WorkflowIntegration.node
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~

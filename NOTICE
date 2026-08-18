@@ -1,0 +1,90 @@
+PerfectVoice
+Copyright (c) 2026 PerfectVoice contributors
+
+This product's own source is MIT-licensed (see LICENSE). It depends on
+third-party software whose terms differ. Official Demucs pretrained
+weights are not MIT and are not bundled with this product.
+
+Third-party notices: docs/licenses/
+
+
+Demucs (source code)
+--------------------
+
+Demucs (https://github.com/adefossez/demucs, formerly
+facebookresearch/demucs) is MIT-licensed. Copyright (c) Meta Platforms,
+Inc. and affiliates / Alexandre Défossez and contributors.
+
+The MIT grant covers the Demucs *source code* only.
+
+
+Demucs (pretrained weights) — not MIT
+-------------------------------------
+
+Official pretrained checkpoints (`htdemucs`, `htdemucs_ft`, and related
+bags) are **not** covered by the MIT license.
+
+On 2022-05-23, Alexandre Défossez stated in
+facebookresearch/demucs#327:
+
+    The model weights are not covered by the MIT license, and are
+    provided only for scientific purposes.
+
+No later statement on the archived facebookresearch/demucs repo or the
+adefossez/demucs fork retracts that. Training data includes MUSDB HQ
+(research terms) and internal Meta recordings. Third-party re-hosts that
+label the same checkpoints MIT or CC-BY-NC do not have authority to
+relicense them.
+
+Product policy (user decision, 2026-08-18)
+------------------------------------------
+
+- Development may download official Demucs weights (checksummed) into a
+  local directory via `scripts/download_demucs.py`.
+- The shipped product does **not** bundle official Demucs weights.
+- The end user must click **Download model** before inference. Clicking
+  is not a sublicense of the weights.
+- Inference loads only a local `repo=` path. The engine must not
+  auto-fetch from Hugging Face or Facebook public files when
+  `Separator()` / a job runs without that click.
+
+CI forbids `huggingface.co/adefossez` and `dl.fbaipublicfiles.com` in
+engine load-path modules (`separate.py`, `models.py`, and other infer
+paths) and in `host/`. Those strings are allowed in
+`scripts/download_demucs.py`, `engine/perfectvoice_engine/weight_fetch.py`,
+and `docs/`.
+
+
+DeepFilterNet 3
+---------------
+
+Optional residual-noise stage. Code and weights: MIT and Apache-2.0
+(https://github.com/Rikorose/DeepFilterNet). Independent of Demucs
+weight terms. Not a substitute for Demucs.
+
+
+ffmpeg
+------
+
+A later installer may bundle an LGPL build of ffmpeg for decode/extract.
+This repository does not yet ship ffmpeg binaries. See
+docs/licenses/ffmpeg-lgpl.md.
+
+
+Blackmagic Design
+-----------------
+
+DaVinci Resolve, the Workflow Integration API, and
+`WorkflowIntegration.node` are property of Blackmagic Design. This
+repository does not redistribute the Blackmagic SDK, Resolve binaries,
+or `WorkflowIntegration.node`. Installers must copy `.node` from the
+user's installed Resolve (or document that step) per the Resolve EULA.
+
+
+Other runtime dependencies (not vendored here)
+----------------------------------------------
+
+PyTorch, torchaudio, soxr, and the host Electron/Chromium inside
+DaVinci Resolve Studio have their own licenses. Notices for binaries
+that a future installer actually ships will be added next to those
+binaries.
