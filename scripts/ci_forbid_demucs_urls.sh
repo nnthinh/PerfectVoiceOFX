@@ -28,6 +28,10 @@ trap 'rm -f "$tmp"' EXIT
   if [ -d host ]; then
     find host -type f ! -name .gitkeep
   fi
+  # Infer entry (keep download_demucs.py out — that file may hold official remotes).
+  if [ -f scripts/isolate_cli.py ]; then
+    echo scripts/isolate_cli.py
+  fi
 } | LC_ALL=C sort -u > "$tmp"
 
 while IFS= read -r f; do
