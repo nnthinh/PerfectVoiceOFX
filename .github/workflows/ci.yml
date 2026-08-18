@@ -28,6 +28,10 @@ jobs:
         run: |
           python3 -m pip install --user 'jsonschema>=4.18' 'numpy>=1.24' 'soxr>=0.5'
           python3 -m unittest tests.unit.test_resample_sync tests.unit.test_blend tests.unit.test_enhance tests.unit.test_cache tests.unit.test_jobs
+      - name: Golden fixtures, sync, cache-key pairs
+        run: |
+          python3 -m pip install --user 'jsonschema>=4.18' 'numpy>=1.24' 'soxr>=0.5'
+          python3 -m unittest tests.golden.test_sync tests.golden.test_cache_keys tests.golden.test_appendix_a
       - name: Engine Separator local-repo tests
         run: |
           python3 -m pip install --user 'numpy>=1.24'
