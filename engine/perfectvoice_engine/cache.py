@@ -149,6 +149,9 @@ def clip_hash12(input_hash: str) -> str:
 
 
 def default_cache_dir() -> Path:
+    env = os.environ.get("PERFECTVOICE_CACHE_DIR")
+    if env:
+        return Path(env).expanduser()
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Caches" / "PerfectVoice"
     if sys.platform == "win32":
@@ -158,6 +161,9 @@ def default_cache_dir() -> Path:
 
 
 def default_cache_index_path() -> Path:
+    env = os.environ.get("PERFECTVOICE_CACHE_INDEX")
+    if env:
+        return Path(env).expanduser()
     if sys.platform == "darwin":
         return (
             Path.home()

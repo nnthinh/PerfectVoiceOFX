@@ -292,7 +292,8 @@ class NoTorchDemucsImportTests(unittest.TestCase):
         engine_root = ENGINE_DIR / "perfectvoice_engine"
         for path in sorted(engine_root.glob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in ast.walk(tree):
+            # Module body only — enhance/separate lazy-import torch inside functions.
+            for node in tree.body:
                 names: list[str] = []
                 if isinstance(node, ast.Import):
                     names = [alias.name for alias in node.names]

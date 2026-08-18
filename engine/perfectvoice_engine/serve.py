@@ -4,7 +4,10 @@ Auth is a 256-bit hex token from a one-shot 0600 file or one stdin line.
 ``--token-fd`` is rejected: fd 3 is not portable to Win32.
 
 Idle-exit after ``--idle-seconds`` (default 1800). Lock file is not
-implemented in this revision. No ML / ffmpeg — the job worker is a stub.
+implemented in this revision.
+
+The worker runs extract → resample → separate → [dfn] → blend → cache → WAV.
+Weight download is a sibling PR; jobs only load a local repo.
 """
 
 from __future__ import annotations
@@ -40,12 +43,18 @@ from perfectvoice_engine.constants import (
     pcm_nbytes,
     raise_if_cancelled,
 )
+from perfectvoice_engine.models import (
+    VOCALS_ONLY_SIG,
+    ModelNotInstalled,
+    default_local_repo,
+    require_model,
+)
 
 ALLOWED_BIND = "127.0.0.1"
 TOKEN_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 MAX_BODY = 16 * 1024 * 1024
-# Long enough that cancel tests win; I/O is not wired yet.
-STUB_HOLD_SECONDS = float(os.environ.get("PERFECTVOICE_STUB_HOLD", "2"))
+# Test-only: hold after dequeue so cancel can win before extract.
+STUB_HOLD_SECONDS = float(os.environ.get("PERFECTVOICE_STUB_HOLD", "0"))
 TERMINAL = frozenset({"done", "error", "cancelled"})
 JOB_PATH = re.compile(r"^/v1/jobs/([^/]+)$")
 JOB_CANCEL = re.compile(r"^/v1/jobs/([^/]+)/cancel$")
@@ -272,6 +281,27 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _require_local_model(params: dict[str, Any]) -> None:
+    """Numpy-free fail-closed check. Never fetches weights."""
+    name = VOCALS_ONLY_SIG if params.get("vocals_only_bag") else str(params["model"])
+    require_model(name, default_local_repo())
+
+
+def write_job_json(job: Job, results: list[dict[str, Any]]) -> Path:
+    payload = {
+        "schema": "perfectvoice.job.v1",
+        "id": job.id,
+        "created_at": job.created_at,
+        "engine_version": ENGINE_VERSION,
+        "params": job.params,
+        "clips": results,
+    }
+    dest = Path(job.output_dir) / "job.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return dest
+
+
 def needs_low_memory(
     n_samples: int,
     channels: int,
@@ -295,15 +325,25 @@ class Job:
     error: str | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     subscribers: list[queue.Queue] = field(default_factory=list)
+    clip_results: list[dict[str, Any]] = field(default_factory=list)
+    progress: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
+        clips_out: list[dict[str, Any]]
+        if self.clip_results:
+            clips_out = list(self.clip_results)
+        else:
+            clips_out = [{"clip_id": c.get("clip_id")} for c in self.clips]
         out: dict[str, Any] = {
             "id": self.id,
             "status": self.status,
             "created_at": self.created_at,
             "engine_version": ENGINE_VERSION,
-            "clips": [{"clip_id": c.get("clip_id")} for c in self.clips],
+            "clips": clips_out,
         }
+        if self.status == "done":
+            out["schema"] = "perfectvoice.job.v1"
+            out["params"] = self.params
         if self.error:
             out["error"] = self.error
         return out
@@ -311,13 +351,15 @@ class Job:
 
 def event_for(job: Job) -> dict[str, Any] | None:
     if job.status == "running":
-        clip_id = job.clips[0].get("clip_id") if job.clips else None
+        clip_id = job.progress.get("clip_id")
+        if clip_id is None and job.clips:
+            clip_id = job.clips[0].get("clip_id")
         return {
             "event": "progress",
             "data": {
                 "clip_id": clip_id,
-                "segment_offset": 0,
-                "audio_length": 0,
+                "segment_offset": job.progress.get("segment_offset", 0),
+                "audio_length": job.progress.get("audio_length", 0),
             },
         }
     if job.status == "done":
@@ -399,41 +441,81 @@ class JobStore:
             except queue.Empty:
                 continue
             try:
-                self._run_stub(job_id)
+                self._run_job(job_id)
             except Exception as exc:  # noqa: BLE001 — last-resort worker fence
                 log(f"worker failed for {job_id}: {type(exc).__name__}")
 
-    def _run_stub(self, job_id: str) -> None:
+    def _finish_locked(self, job: Job, status: str, error: str | None = None) -> None:
+        if job.status in TERMINAL:
+            return
+        job.status = status
+        job.error = error
+        self._notify_locked(job, event_for(job))
+
+    def _run_job(self, job_id: str) -> None:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None or job.status != "queued":
                 return
             job.status = "running"
-            ev = event_for(job)
             cancel_event = job.cancel_event
-            self._notify_locked(job, ev)
-        # Hold so cancel can win. Do not call Demucs / ffmpeg.
+            self._notify_locked(job, event_for(job))
+
+        def on_progress(data: dict[str, Any]) -> None:
+            with self._lock:
+                if job.status != "running":
+                    return
+                job.progress = dict(data)
+                self._notify_locked(job, {"event": "progress", "data": dict(data)})
+
         try:
             raise_if_cancelled(cancel_event)
-            cancel_event.wait(timeout=STUB_HOLD_SECONDS)
-            raise_if_cancelled(cancel_event)
+            if STUB_HOLD_SECONDS > 0:
+                cancel_event.wait(timeout=STUB_HOLD_SECONDS)
+                raise_if_cancelled(cancel_event)
+            try:
+                # Lazy: sidecar unit tests import serve without numpy/soxr.
+                from perfectvoice_engine.pipeline import run_job
+            except ImportError:
+                # Fail closed on missing weights even when the I/O stack is absent.
+                _require_local_model(job.params)
+                raise
+            results = run_job(
+                job.clips,
+                job.params,
+                job.output_dir,
+                cancel_event=cancel_event,
+                on_progress=on_progress,
+            )
         except JobCancelled:
             with self._lock:
-                if job.status in TERMINAL:
-                    return
-                job.status = "cancelled"
-                self._notify_locked(job, event_for(job))
+                self._finish_locked(job, "cancelled")
             return
+        except ModelNotInstalled as exc:
+            with self._lock:
+                self._finish_locked(job, "error", str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001 — surface to GET /v1/jobs/:id
+            with self._lock:
+                if cancel_event.is_set():
+                    self._finish_locked(job, "cancelled")
+                    return
+                self._finish_locked(job, "error", str(exc))
+            return
+
         with self._lock:
             if job.status in TERMINAL:
                 return
             if job.cancel_event.is_set():
-                job.status = "cancelled"
-                self._notify_locked(job, event_for(job))
+                self._finish_locked(job, "cancelled")
                 return
-            job.status = "error"
-            job.error = "engine_io_not_wired"
-            self._notify_locked(job, event_for(job))
+            job.clip_results = results
+            try:
+                write_job_json(job, results)
+            except OSError as exc:
+                self._finish_locked(job, "error", f"failed to write job.json: {exc}")
+                return
+            self._finish_locked(job, "done")
 
     def _notify_locked(self, job: Job, ev: dict[str, Any] | None) -> None:
         if ev is None:

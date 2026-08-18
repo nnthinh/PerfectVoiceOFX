@@ -568,7 +568,7 @@ class SidecarHttpTests(unittest.TestCase):
         assert isinstance(again, dict)
         self.assertEqual(again.get("error"), "conflict")
 
-    def test_stub_worker_errors_not_wired(self) -> None:
+    def test_missing_model_errors_without_download(self) -> None:
         eng = self.start(hold="0.2")
         status, accepted, _ = eng.request("POST", "/v1/jobs", self.payload())
         self.assertEqual(status, 202)
@@ -585,7 +585,9 @@ class SidecarHttpTests(unittest.TestCase):
                 break
             time.sleep(0.05)
         self.assertEqual(snap.get("status"), "error")
-        self.assertEqual(snap.get("error"), "engine_io_not_wired")
+        self.assertIn("Model not installed", str(snap.get("error")))
+        self.assertNotIn("huggingface.co", eng.stderr_text().lower())
+        self.assertNotIn("fbaipublicfiles.com", eng.stderr_text().lower())
 
     def test_sse_error_event(self) -> None:
         eng = self.start(hold="0.2")
@@ -601,7 +603,7 @@ class SidecarHttpTests(unittest.TestCase):
             self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
             payload = resp.read().decode("utf-8")
         self.assertIn("event: error", payload)
-        self.assertIn("engine_io_not_wired", payload)
+        self.assertIn("Model not installed", payload)
 
     def test_chaos_process_death_drops_connection(self) -> None:
         eng = self.start()
