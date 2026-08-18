@@ -15,7 +15,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Sequence
 
 import numpy as np
 
@@ -35,6 +35,11 @@ CLIP_POLICY = "no_demucs_rescale"
 DEFAULT_SEGMENT = 7.8
 DEFAULT_OVERLAP = 0.25
 DEFAULT_SHIFTS = 1
+# Long-form windows sit *outside* Demucs (which already OLA-s 7.8 s segments).
+WINDOW_SECONDS = 600.0
+WINDOW_OVERLAP_SECONDS = 1.0
+MEMORY_CAP_BYTES = 2 * 1024 ** 3
+_FLOAT32_BYTES = 4
 
 
 class JobCancelled(RuntimeError):
@@ -130,16 +135,170 @@ def _to_numpy(value: Any) -> np.ndarray:
     return np.asarray(value, dtype=np.float32)
 
 
+def raise_if_cancelled(cancel_event: object | None) -> None:
+    """Raise JobCancelled if an event is set or a callback returns true."""
+    if cancel_event is None:
+        return
+    is_set = getattr(cancel_event, "is_set", None)
+    if callable(is_set):
+        if is_set():
+            raise JobCancelled("job cancelled")
+        return
+    if callable(cancel_event) and cancel_event():
+        raise JobCancelled("job cancelled")
+
+
 def _cancel_callback(cancel_event: object | None) -> Callable[[dict[str, Any]], None] | None:
     if cancel_event is None:
         return None
 
     def callback(_info: dict[str, Any]) -> None:
-        is_set = getattr(cancel_event, "is_set", None)
-        if callable(is_set) and is_set():
-            raise JobCancelled("job cancelled")
+        raise_if_cancelled(cancel_event)
 
     return callback
+
+
+def pcm_nbytes(n_samples: int, channels: int, itemsize: int = _FLOAT32_BYTES) -> int:
+    return int(n_samples) * int(channels) * int(itemsize)
+
+
+def exceeds_memory_cap(
+    n_samples: int,
+    channels: int,
+    *,
+    cap: int | None = None,
+) -> bool:
+    """True when duration * rate * ch * 4 would exceed the 2 GiB cap."""
+    limit = MEMORY_CAP_BYTES if cap is None else int(cap)
+    return pcm_nbytes(n_samples, channels) > limit
+
+
+def window_hop_samples(
+    sample_rate: int,
+    *,
+    window_s: float | None = None,
+    overlap_s: float | None = None,
+) -> tuple[int, int]:
+    window_s = WINDOW_SECONDS if window_s is None else float(window_s)
+    overlap_s = WINDOW_OVERLAP_SECONDS if overlap_s is None else float(overlap_s)
+    window = max(1, int(round(window_s * float(sample_rate))))
+    overlap = max(0, int(round(overlap_s * float(sample_rate))))
+    if overlap >= window:
+        overlap = window - 1
+    return window, overlap
+
+
+def should_window(
+    n_samples: int,
+    channels: int,
+    sample_rate: int,
+    *,
+    window_s: float | None = None,
+    cap: int | None = None,
+) -> bool:
+    """Window when the clip is longer than 10 min or the 2 GiB cap would trip."""
+    if n_samples <= 0:
+        return False
+    if exceeds_memory_cap(n_samples, channels, cap=cap):
+        return True
+    window, _overlap = window_hop_samples(sample_rate, window_s=window_s)
+    return n_samples > window
+
+
+def window_slices(
+    n_samples: int,
+    sample_rate: int,
+    *,
+    window_s: float | None = None,
+    overlap_s: float | None = None,
+) -> list[tuple[int, int]]:
+    """Half-open ``[start, end)`` slices, 10 min long, 1 s overlap."""
+    if n_samples <= 0:
+        return []
+    window, overlap = window_hop_samples(
+        sample_rate, window_s=window_s, overlap_s=overlap_s
+    )
+    if n_samples <= window:
+        return [(0, int(n_samples))]
+    hop = window - overlap
+    slices: list[tuple[int, int]] = []
+    start = 0
+    while start < n_samples:
+        end = min(start + window, n_samples)
+        slices.append((start, end))
+        if end >= n_samples:
+            break
+        start += hop
+    return slices
+
+
+def _fade_gains(n: int, fade_in: int, fade_out: int) -> np.ndarray:
+    # Complementary linear ramps: linspace(..., endpoint=False) so an
+    # adjacent fade-out + fade-in pair sums to 1 at every overlap sample.
+    gain = np.ones(n, dtype=np.float32)
+    if fade_in > 0:
+        fade_in = min(int(fade_in), n)
+        gain[:fade_in] = np.linspace(0.0, 1.0, fade_in, endpoint=False, dtype=np.float32)
+    if fade_out > 0:
+        fade_out = min(int(fade_out), n)
+        gain[-fade_out:] *= np.linspace(1.0, 0.0, fade_out, endpoint=False, dtype=np.float32)
+    return gain
+
+
+def overlap_add(
+    chunks: Sequence[np.ndarray],
+    slices: Sequence[tuple[int, int]],
+    n_samples: int,
+    overlap: int,
+) -> np.ndarray:
+    """Linear OLA of ``(C, T_i)`` windows into ``(C, n_samples)``.
+
+    Fades live here, not inside Demucs. First window has no fade-in; last
+    window has no fade-out so the tail is not attenuated.
+    """
+    if len(chunks) != len(slices):
+        raise ValueError("chunks and slices must have the same length")
+    if n_samples < 0:
+        raise ValueError("n_samples must be >= 0")
+    if not chunks:
+        return np.zeros((2, max(0, n_samples)), dtype=np.float32)
+    channels = int(_as_channels_first(chunks[0]).shape[0])
+    out = np.zeros((channels, n_samples), dtype=np.float32)
+    last = len(chunks) - 1
+    for i, (chunk, (start, end)) in enumerate(zip(chunks, slices)):
+        piece = _match_frames(_as_channels_first(chunk), end - start)
+        fade_in = int(overlap) if i > 0 else 0
+        fade_out = int(overlap) if i < last else 0
+        overlap_add_into(out, piece, start, fade_in=fade_in, fade_out=fade_out)
+    return out
+
+
+def overlap_add_into(
+    dest: np.ndarray,
+    chunk: np.ndarray,
+    start: int,
+    *,
+    fade_in: int,
+    fade_out: int,
+) -> None:
+    """Mix one window into ``dest`` with complementary linear fades."""
+    piece = np.asarray(chunk, dtype=np.float32)
+    n = int(piece.shape[-1])
+    if n == 0:
+        return
+    gain = _fade_gains(n, fade_in, fade_out)
+    dest[:, start : start + n] += piece * gain
+
+
+def _match_frames(arr: np.ndarray, n: int) -> np.ndarray:
+    cur = int(arr.shape[-1])
+    if cur == n:
+        return arr
+    if cur > n:
+        return arr[..., :n]
+    out = np.zeros(arr.shape[:-1] + (n,), dtype=np.float32)
+    out[..., :cur] = arr
+    return out
 
 
 def _as_channels_first(wav: np.ndarray) -> np.ndarray:
@@ -153,6 +312,44 @@ def _as_channels_first(wav: np.ndarray) -> np.ndarray:
     raise ValueError("wav_44100_stereo must be shape (C, T) with C in {1, 2}")
 
 
+def _separate_one(separator: Any, wav: np.ndarray, cancel_event: object | None) -> np.ndarray:
+    raise_if_cancelled(cancel_event)
+    _mix, stems = separator.separate_tensor(
+        _to_model_input(wav), sr=MODEL_SAMPLE_RATE
+    )
+    vocals = _as_channels_first(_to_numpy(stems["vocals"]))
+    return _match_frames(vocals, int(wav.shape[-1]))
+
+
+def _separate_windowed(
+    separator: Any,
+    wav: np.ndarray,
+    cancel_event: object | None,
+    *,
+    window_s: float | None = None,
+    overlap_s: float | None = None,
+) -> np.ndarray:
+    """Run Demucs per 10-min window and OLA outside the model."""
+    n_samples = int(wav.shape[-1])
+    channels = int(wav.shape[0])
+    slices = window_slices(
+        n_samples, MODEL_SAMPLE_RATE, window_s=window_s, overlap_s=overlap_s
+    )
+    _window, overlap = window_hop_samples(
+        MODEL_SAMPLE_RATE, window_s=window_s, overlap_s=overlap_s
+    )
+    # Incremental mix: never keep every window tensor (cap / low-memory path).
+    out = np.zeros((channels, n_samples), dtype=np.float32)
+    last = len(slices) - 1
+    for i, (start, end) in enumerate(slices):
+        raise_if_cancelled(cancel_event)
+        piece = _separate_one(separator, wav[:, start:end], cancel_event)
+        fade_in = overlap if i > 0 else 0
+        fade_out = overlap if i < last else 0
+        overlap_add_into(out, piece, start, fade_in=fade_in, fade_out=fade_out)
+    return out
+
+
 def separate_vocals(req: SeparateRequest, local_repo: Path) -> SeparateResult:
     """Separator(model=..., repo=local_repo) only. Never load a name without repo=."""
     repo = Path(local_repo)
@@ -160,6 +357,7 @@ def separate_vocals(req: SeparateRequest, local_repo: Path) -> SeparateResult:
     files = require_model(name, repo)
     wav = _as_channels_first(req.wav_44100_stereo)
     device = resolve_device(req.device)
+    windowed = should_window(int(wav.shape[-1]), int(wav.shape[0]), MODEL_SAMPLE_RATE)
 
     with _offline_hub_env():
         separator = _separator_cls()(
@@ -175,8 +373,10 @@ def separate_vocals(req: SeparateRequest, local_repo: Path) -> SeparateResult:
             callback=_cancel_callback(req.cancel_event),
         )
         started = time.perf_counter()
-        _mix, stems = separator.separate_tensor(_to_model_input(wav), sr=MODEL_SAMPLE_RATE)
-    vocals = _to_numpy(stems["vocals"])
+        if windowed:
+            vocals = _separate_windowed(separator, wav, req.cancel_event)
+        else:
+            vocals = _separate_one(separator, wav, req.cancel_event)
     vocals = _as_channels_first(vocals)
     # clip_policy=no_demucs_rescale: do not divide by peak or pass clip=rescale.
     # Report sample peak so a later stage can soft-clip if > 0 dBFS.
@@ -198,11 +398,20 @@ __all__ = [
     "DEFAULT_OVERLAP",
     "DEFAULT_SEGMENT",
     "DEFAULT_SHIFTS",
+    "MEMORY_CAP_BYTES",
+    "WINDOW_OVERLAP_SECONDS",
+    "WINDOW_SECONDS",
     "JobCancelled",
     "ModelNotInstalled",
     "SeparateRequest",
     "SeparateResult",
+    "exceeds_memory_cap",
+    "overlap_add",
+    "pcm_nbytes",
+    "raise_if_cancelled",
     "resolve_device",
     "separate_vocals",
     "separator_model_name",
+    "should_window",
+    "window_slices",
 ]

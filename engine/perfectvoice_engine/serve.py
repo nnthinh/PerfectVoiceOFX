@@ -39,6 +39,12 @@ MAX_BODY = 16 * 1024 * 1024
 # Long enough that cancel tests win; I/O is not wired yet.
 STUB_HOLD_SECONDS = float(os.environ.get("PERFECTVOICE_STUB_HOLD", "2"))
 TERMINAL = frozenset({"done", "error", "cancelled"})
+# Keep in sync with perfectvoice_engine.separate — do not import that
+# module here (serve CI must not pull numpy / the infer stack).
+WINDOW_SECONDS = 600.0
+WINDOW_OVERLAP_SECONDS = 1.0
+MEMORY_CAP_BYTES = 2 * 1024 ** 3
+_FLOAT32_BYTES = 4
 JOB_PATH = re.compile(r"^/v1/jobs/([^/]+)$")
 JOB_CANCEL = re.compile(r"^/v1/jobs/([^/]+)/cancel$")
 JOB_EVENTS = re.compile(r"^/v1/jobs/([^/]+)/events$")
@@ -264,6 +270,39 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def pcm_nbytes(duration_s: float, sample_rate: int, channels: int) -> int:
+    """``duration * rate * ch * 4`` — the §3.4 low-memory trigger."""
+    return int(float(duration_s) * int(sample_rate) * int(channels) * _FLOAT32_BYTES)
+
+
+def needs_low_memory(
+    duration_s: float,
+    sample_rate: int,
+    channels: int,
+    *,
+    cap: int | None = None,
+) -> bool:
+    limit = MEMORY_CAP_BYTES if cap is None else int(cap)
+    return pcm_nbytes(duration_s, sample_rate, channels) > limit
+
+
+class JobCancelledStub(RuntimeError):
+    """Local stand-in so serve does not import separate.JobCancelled."""
+
+
+def raise_if_cancelled(cancel_event: object | None) -> None:
+    """Same contract as separate.raise_if_cancelled (event or callback)."""
+    if cancel_event is None:
+        return
+    is_set = getattr(cancel_event, "is_set", None)
+    if callable(is_set):
+        if is_set():
+            raise JobCancelledStub("job cancelled")
+        return
+    if callable(cancel_event) and cancel_event():
+        raise JobCancelledStub("job cancelled")
+
+
 @dataclass
 class Job:
     id: str
@@ -394,7 +433,17 @@ class JobStore:
             cancel_event = job.cancel_event
             self._notify_locked(job, ev)
         # Hold so cancel can win. Do not call Demucs / ffmpeg.
-        cancel_event.wait(timeout=STUB_HOLD_SECONDS)
+        try:
+            raise_if_cancelled(cancel_event)
+            cancel_event.wait(timeout=STUB_HOLD_SECONDS)
+            raise_if_cancelled(cancel_event)
+        except JobCancelledStub:
+            with self._lock:
+                if job.status in TERMINAL:
+                    return
+                job.status = "cancelled"
+                self._notify_locked(job, event_for(job))
+            return
         with self._lock:
             if job.status in TERMINAL:
                 return
@@ -489,6 +538,9 @@ class EngineHandler(BaseHTTPRequestHandler):
                     "protocol_version": PROTOCOL_VERSION,
                     "devices": ["cpu"],
                     "models_ready": {},
+                    "window_seconds": WINDOW_SECONDS,
+                    "window_overlap_seconds": WINDOW_OVERLAP_SECONDS,
+                    "memory_cap_bytes": MEMORY_CAP_BYTES,
                 },
             )
             return

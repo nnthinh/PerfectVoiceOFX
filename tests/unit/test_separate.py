@@ -397,7 +397,8 @@ class OfflineFixtureTests(unittest.TestCase):
                 ),
                 patch("perfectvoice_engine.separate.resolve_device", return_value="cpu"),
             ):
-                separate_vocals(_req(cancel_event=event), repo)
+                with self.assertRaises(JobCancelled):
+                    separate_vocals(_req(cancel_event=event), repo)
         callback = cb_holder["callback"]
         self.assertIsNotNone(callback)
         with self.assertRaises(JobCancelled):

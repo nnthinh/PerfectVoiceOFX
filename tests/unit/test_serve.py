@@ -26,12 +26,15 @@ if str(ENGINE_DIR) not in sys.path:
 
 from perfectvoice_engine.serve import (  # noqa: E402
     BindError,
+    MEMORY_CAP_BYTES,
     PathNotAllowed,
     TokenError,
     check_allowed_root,
     check_path_under_roots,
     load_token_file,
+    needs_low_memory,
     parse_token,
+    pcm_nbytes,
     validate_bind,
     validate_job_request,
 )
@@ -239,6 +242,15 @@ def _run_cli(bind: str, extra: list[str] | None = None, timeout: float = 5.0) ->
 
 
 class BindAndTokenUnitTests(unittest.TestCase):
+    def test_low_memory_cap_is_two_gib(self) -> None:
+        # duration * rate * ch * 4 > 2 GiB trips the windowed / low-memory path.
+        self.assertEqual(MEMORY_CAP_BYTES, 2 * 1024 ** 3)
+        rate, ch = 44100, 2
+        # ~90 min stereo f32 @ 44.1 k is under; ~102 min is over.
+        self.assertFalse(needs_low_memory(90 * 60, rate, ch))
+        self.assertTrue(needs_low_memory(102 * 60, rate, ch))
+        self.assertGreater(pcm_nbytes(102 * 60, rate, ch), MEMORY_CAP_BYTES)
+
     def test_reject_wan_bind_values(self) -> None:
         for host in ("0.0.0.0", "::", "", "localhost", "127.0.0.2"):
             with self.subTest(host=host):
@@ -427,6 +439,9 @@ class SidecarHttpTests(unittest.TestCase):
         self.assertIn("devices", body)
         self.assertIn("models_ready", body)
         self.assertFalse(body["models_ready"])
+        self.assertEqual(body.get("window_seconds"), 600.0)
+        self.assertEqual(body.get("window_overlap_seconds"), 1.0)
+        self.assertEqual(body.get("memory_cap_bytes"), MEMORY_CAP_BYTES)
         status, body, _ = eng.request("POST", "/v1/models/download", body={"name": "htdemucs"})
         self.assertEqual(status, 404)
 
