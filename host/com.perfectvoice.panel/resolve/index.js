@@ -6,6 +6,7 @@ const reject = require("./reject");
 const selection = require("./selection");
 const inspect = require("./inspect");
 const place = require("./place");
+const job = require("./job");
 
 module.exports = {
     ...time,
@@ -14,4 +15,5 @@ module.exports = {
     ...selection,
     ...inspect,
     ...place,
+    ...job,
 };

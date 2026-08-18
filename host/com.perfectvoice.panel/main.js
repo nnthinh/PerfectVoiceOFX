@@ -3,8 +3,9 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { startEngine, stopEngine, getPublicStatus } = require("./engine");
+const { startEngine, stopEngine, getPublicStatus, downloadModel } = require("./engine");
 const { inspectSelection, placeIsolated, placeTestWav } = require("./resolve");
+const { removeAccompaniment, cancelActiveJob } = require("./jobs");
 
 const PLUGIN_ID = "com.perfectvoice.panel";
 const STUDIO_REQUIRED =
@@ -142,12 +143,45 @@ function registerIpc() {
             return { ok: false, error: err && err.message ? err.message : String(err) };
         }
     });
+    ipcMain.handle("pv:removeAccompaniment", async (_e, options) => {
+        try {
+            const resolve = await ensureResolveInit();
+            if (!resolve) {
+                return { ok: false, error: resolveError || STUDIO_REQUIRED };
+            }
+            return await removeAccompaniment(resolve, options || {}, (payload) => {
+                try {
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send("pv:jobEvent", payload);
+                    }
+                } catch {
+                    // ignore
+                }
+            });
+        } catch (err) {
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    });
+    ipcMain.handle("pv:cancelJob", async () => {
+        try {
+            return await cancelActiveJob();
+        } catch (err) {
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    });
+    ipcMain.handle("pv:downloadModel", async (_e, name) => {
+        try {
+            return await downloadModel(name);
+        } catch (err) {
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    });
 }
 
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 560,
-        height: 760,
+        height: 900,
         useContentSize: true,
         webPreferences: {
             preload: path.join(__dirname, "preload.js"),

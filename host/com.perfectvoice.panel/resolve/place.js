@@ -14,7 +14,7 @@ const {
     parseTimelineFrameRate,
     roundHalfUp,
 } = require("./time");
-const { callValue, isCallable } = require("./selection");
+const { callValue, isCallable, collectSelected, groupSelectedItems } = require("./selection");
 const { inspectSelection } = require("./inspect");
 
 const ISOLATED_TRACK = "PV Isolated Voice";
@@ -315,6 +315,62 @@ function placeIsolated(resolve, params) {
     };
 }
 
+function clipMatchesMuteTarget(row, target, recordFrame) {
+    if (!target) return false;
+    if (target.uniqueId && row.uniqueId && target.uniqueId === row.uniqueId) return true;
+    if (target.filePath && row.filePath && target.filePath === row.filePath) {
+        if (target.recordFrame == null || recordFrame == null) return true;
+        return Number(target.recordFrame) === Number(recordFrame);
+    }
+    return false;
+}
+
+function muteOriginalClips(resolve, targets) {
+    const list = Array.isArray(targets) ? targets.filter(Boolean) : [];
+    if (!list.length) {
+        return { ok: true, muted: 0, warnings: [] };
+    }
+    if (!resolve) {
+        return { ok: false, error: "Resolve is not connected.", muted: 0, warnings: [] };
+    }
+    const pm = callValue(resolve, "GetProjectManager");
+    const project = pm ? callValue(pm, "GetCurrentProject") : null;
+    const timeline = project ? callValue(project, "GetCurrentTimeline") : null;
+    if (!timeline) {
+        return { ok: false, error: "Need a current timeline to mute originals.", muted: 0, warnings: [] };
+    }
+    const selected = collectSelected(timeline);
+    const rows = groupSelectedItems(selected.items);
+    let muted = 0;
+    const warnings = [];
+    const seen = new Set();
+    for (const row of rows) {
+        if (row.suppressedDuplicate) continue;
+        const recordFrame = row.item ? Number(callValue(row.item, "GetStart")) : null;
+        const match = list.find((t) => clipMatchesMuteTarget(row, t, recordFrame));
+        if (!match) continue;
+        const key = row.uniqueId || `${row.filePath}:${recordFrame}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const item = row.item;
+        const label = row.name || match.name || match.display_name || "clip";
+        if (!item || !isCallable(item, "SetClipEnabled")) {
+            warnings.push(`Cannot mute “${label}”: SetClipEnabled is unavailable.`);
+            continue;
+        }
+        const ok = callValue(item, "SetClipEnabled", false);
+        if (ok === false) {
+            warnings.push(`SetClipEnabled failed for “${label}”.`);
+        } else {
+            muted += 1;
+        }
+    }
+    if (!muted && !warnings.length) {
+        warnings.push("No matching original clips were muted. Select the same clips and try again.");
+    }
+    return { ok: true, muted, warnings };
+}
+
 function pickPlaceClip(inspect) {
     if (!inspect || !Array.isArray(inspect.clips)) return null;
     const jobs = inspect.clips.filter((c) => !c.suppressedDuplicate);
@@ -389,6 +445,8 @@ module.exports = {
     appendSucceeded,
     placeIsolated,
     placeTestWav,
+    muteOriginalClips,
+    clipMatchesMuteTarget,
     pickPlaceClip,
     defaultTestWavPath,
 };

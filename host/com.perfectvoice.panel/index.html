@@ -62,6 +62,25 @@
         .clips .dup { color: #888; }
         #inspectMeta { white-space: pre-wrap; }
         button + button { margin-left: 8px; }
+        label.check { display: block; margin: 8px 0; font-size: 13px; }
+        label.check input { margin-right: 6px; }
+        select {
+            padding: 6px 8px;
+            margin-top: 8px;
+            background: #111;
+            color: #eee;
+            border: 1px solid #444;
+        }
+        #jobProgress {
+            background: #111;
+            padding: 8px;
+            min-height: 2.5em;
+            margin: 8px 0 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        #jobError { color: #e88; font-size: 12px; margin-top: 8px; }
     </style>
 </head>
 <body>
@@ -82,14 +101,41 @@
         <button id="inspectBtn" type="button">Inspect selection</button>
         <button id="placeBtn" type="button">Place test WAV</button>
     </p>
-    <p class="hint">Inspect lists selected clips and reject reasons. Place test WAV imports silence onto PV Isolated Voice using Appendix A handles. Jobs are not in this release.</p>
+    <p class="hint">Inspect lists selected clips and reject reasons. Place test WAV imports silence onto PV Isolated Voice using Appendix A handles.</p>
     <div id="inspectMeta" class="hint"></div>
     <ul id="clipList" class="clips"></ul>
     <p id="inspectError"></p>
 
     <hr>
     <div class="row"><strong>Remove musical accompaniment</strong></div>
-    <p><button type="button" disabled>Remove musical accompaniment</button></p>
-    <p class="hint">POST /v1/jobs is not wired in this release.</p>
+    <p>
+        <label for="modelSelect">Preset</label>
+        <select id="modelSelect">
+            <option value="htdemucs" selected>Fast (htdemucs)</option>
+            <option value="htdemucs_ft">Quality (htdemucs_ft)</option>
+        </select>
+    </p>
+    <label class="check">
+        <input id="dfnCheck" type="checkbox">
+        Reduce residual environmental noise (DeepFilterNet 3)
+    </label>
+    <label class="check">
+        <input id="muteCheck" type="checkbox">
+        Mute original clips
+    </label>
+    <label class="check">
+        <input id="cacheCheck" type="checkbox" checked>
+        Use cache
+    </label>
+    <p>
+        <button id="removeBtn" type="button" disabled>Remove musical accompaniment</button>
+        <button id="cancelBtn" type="button" disabled>Cancel</button>
+    </p>
+    <p>
+        <button id="downloadBtn" type="button">Download model</button>
+    </p>
+    <pre id="jobProgress">Inspect a selection and start the engine to enable Remove.</pre>
+    <p id="jobError"></p>
+    <p class="hint">Jobs run on the local engine. The isolated WAV is placed on PV Isolated Voice using the engine’s handles_left_actual. Download model is a user click — the engine never fetches weights by itself.</p>
 </body>
 </html>

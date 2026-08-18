@@ -164,10 +164,253 @@ function getPublicStatus() {
             return null;
         }
     })();
+    const caps = session && session.capabilities;
     return {
         connected: isAlive(),
         enginePath: enginePath || null,
         health: session && session.health ? session.health : null,
+        modelsReady: caps && caps.models_ready != null ? caps.models_ready : null,
+        devices: caps && caps.devices ? caps.devices : null,
+    };
+}
+
+function engineErrorMessage(body, fallback) {
+    if (body && typeof body === "object") {
+        if (typeof body.detail === "string" && body.detail) return body.detail;
+        if (typeof body.error === "string" && body.error) return body.error;
+        if (typeof body.message === "string" && body.message) return body.message;
+    }
+    return fallback;
+}
+
+function parseSseBuffer(buf) {
+    const events = [];
+    let rest = String(buf || "");
+    while (true) {
+        const idx = rest.indexOf("\n\n");
+        if (idx < 0) break;
+        const block = rest.slice(0, idx);
+        rest = rest.slice(idx + 2);
+        let event = "message";
+        const dataLines = [];
+        for (const line of block.split("\n")) {
+            if (!line || line.startsWith(":")) continue;
+            if (line.startsWith("event:")) {
+                event = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+                dataLines.push(line.slice(5).trim());
+            }
+        }
+        if (!dataLines.length) continue;
+        const raw = dataLines.join("\n");
+        let data = raw;
+        try {
+            data = JSON.parse(raw);
+        } catch {
+            // keep raw string
+        }
+        events.push({ event, data });
+    }
+    return { events, rest };
+}
+
+function requestJson(method, pathname, body) {
+    return new Promise((resolve, reject) => {
+        if (!isAlive()) {
+            reject(new Error("Engine is not connected."));
+            return;
+        }
+        const base = String(session.readyUrl).replace(/\/$/, "");
+        const url = new URL(pathname, `${base}/`);
+        const payload = body === undefined ? null : JSON.stringify(body);
+        const headers = {
+            Authorization: `Bearer ${session.token}`,
+            Accept: "application/json",
+        };
+        if (payload != null) {
+            headers["Content-Type"] = "application/json";
+            headers["Content-Length"] = Buffer.byteLength(payload);
+        }
+        const req = http.request(
+            {
+                hostname: url.hostname,
+                port: url.port,
+                path: `${url.pathname}${url.search}`,
+                method,
+                headers,
+            },
+            (res) => {
+                let data = "";
+                res.setEncoding("utf8");
+                res.on("data", (c) => {
+                    data += c;
+                });
+                res.on("end", () => {
+                    let parsed = null;
+                    if (data) {
+                        try {
+                            parsed = JSON.parse(data);
+                        } catch {
+                            parsed = { error: "invalid_json" };
+                        }
+                    }
+                    resolve({ status: res.statusCode, body: parsed });
+                });
+            },
+        );
+        req.on("error", reject);
+        req.setTimeout(30000, () => req.destroy(new Error("engine request timeout")));
+        if (payload != null) req.write(payload);
+        req.end();
+    });
+}
+
+function streamJobEvents(jobId, onEvent) {
+    if (!isAlive()) {
+        return {
+            abort() {},
+            done: Promise.reject(new Error("Engine is not connected.")),
+        };
+    }
+    const base = String(session.readyUrl).replace(/\/$/, "");
+    const url = new URL(`/v1/jobs/${jobId}/events`, `${base}/`);
+    const handle = { req: null, abort() {} };
+    handle.done = new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (err, ev) => {
+            if (settled) return;
+            settled = true;
+            if (err) reject(err);
+            else resolve(ev);
+        };
+        const req = http.get(
+            {
+                hostname: url.hostname,
+                port: url.port,
+                path: url.pathname,
+                headers: {
+                    Authorization: `Bearer ${session.token}`,
+                    Accept: "text/event-stream",
+                },
+            },
+            (res) => {
+                if (res.statusCode !== 200) {
+                    let data = "";
+                    res.setEncoding("utf8");
+                    res.on("data", (c) => {
+                        data += c;
+                    });
+                    res.on("end", () => {
+                        let parsed = null;
+                        try {
+                            parsed = data ? JSON.parse(data) : null;
+                        } catch {
+                            parsed = null;
+                        }
+                        finish(
+                            new Error(
+                                engineErrorMessage(parsed, `events status ${res.statusCode}`),
+                            ),
+                        );
+                    });
+                    return;
+                }
+                let buf = "";
+                res.setEncoding("utf8");
+                res.on("data", (chunk) => {
+                    buf += chunk;
+                    const parsed = parseSseBuffer(buf);
+                    buf = parsed.rest;
+                    for (const ev of parsed.events) {
+                        if (typeof onEvent === "function") onEvent(ev);
+                        if (ev.event === "done" || ev.event === "error") {
+                            res.destroy();
+                            finish(null, ev);
+                            return;
+                        }
+                    }
+                });
+                res.on("end", () => finish(null, null));
+                res.on("error", (err) => finish(err));
+            },
+        );
+        handle.req = req;
+        handle.abort = () => {
+            try {
+                req.destroy();
+            } catch {
+                // ignore
+            }
+        };
+        req.on("error", (err) => finish(err));
+    });
+    return handle;
+}
+
+async function refreshCapabilities() {
+    if (!isAlive()) return null;
+    const res = await requestJson("GET", "/v1/capabilities");
+    if (res.status === 200 && res.body && typeof res.body === "object") {
+        session.capabilities = res.body;
+        return res.body;
+    }
+    return null;
+}
+
+async function createJob(body) {
+    const res = await requestJson("POST", "/v1/jobs", body);
+    if (res.status !== 202) {
+        const err = new Error(engineErrorMessage(res.body, `create job status ${res.status}`));
+        err.status = res.status;
+        throw err;
+    }
+    return res.body;
+}
+
+async function getJob(jobId) {
+    const res = await requestJson("GET", `/v1/jobs/${jobId}`);
+    if (res.status !== 200) {
+        const err = new Error(engineErrorMessage(res.body, `job status ${res.status}`));
+        err.status = res.status;
+        throw err;
+    }
+    return res.body;
+}
+
+async function cancelJob(jobId) {
+    const res = await requestJson("POST", `/v1/jobs/${jobId}/cancel`);
+    if (res.status !== 202) {
+        const err = new Error(engineErrorMessage(res.body, `cancel status ${res.status}`));
+        err.status = res.status;
+        throw err;
+    }
+    return res.body;
+}
+
+async function downloadModel(name) {
+    const model = name || "htdemucs";
+    if (!isAlive()) {
+        return {
+            ok: false,
+            notImplemented: true,
+            error: "Download model is not implemented in this release.",
+        };
+    }
+    const res = await requestJson("POST", "/v1/models/download", { name: model });
+    if (res.status === 404) {
+        return {
+            ok: false,
+            notImplemented: true,
+            error: "Download model is not implemented in this release.",
+        };
+    }
+    if (res.status >= 200 && res.status < 300) {
+        return { ok: true, status: res.status, body: res.body };
+    }
+    return {
+        ok: false,
+        error: engineErrorMessage(res.body, `download status ${res.status}`),
+        status: res.status,
     };
 }
 
@@ -287,7 +530,13 @@ async function doStart() {
             readyUrl,
             enginePath: absEnginePath,
             health,
+            capabilities: null,
         };
+        try {
+            await refreshCapabilities();
+        } catch {
+            // health already proved the sidecar; capabilities are optional
+        }
         return { readyUrl, health, enginePath: absEnginePath };
     } catch (err) {
         unlinkIfPresent(tokenPath);
@@ -301,9 +550,14 @@ function startEngine() {
     if (startPromise) return startPromise;
     if (isAlive()) {
         startPromise = getHealth(session.readyUrl, session.token)
-            .then((raw) => {
+            .then(async (raw) => {
                 const health = parseHealth(raw);
                 session.health = health;
+                try {
+                    await refreshCapabilities();
+                } catch {
+                    // ignore
+                }
                 return {
                     readyUrl: session.readyUrl,
                     health,
@@ -328,6 +582,10 @@ async function stopEngine() {
     await stopChild(current.child);
 }
 
+function __setSessionForTests(next) {
+    session = next;
+}
+
 module.exports = {
     FAIL_CLOSED,
     ENGINE_NOT_FOUND,
@@ -336,6 +594,16 @@ module.exports = {
     startEngine,
     stopEngine,
     getPublicStatus,
+    isAlive,
+    parseSseBuffer,
+    requestJson,
+    streamJobEvents,
+    createJob,
+    getJob,
+    cancelJob,
+    downloadModel,
+    refreshCapabilities,
+    __setSessionForTests,
 };
 
 if (require.main === module) {

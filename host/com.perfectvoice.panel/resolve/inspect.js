@@ -106,6 +106,23 @@ function parseSampleRate(raw) {
     return Math.round(n);
 }
 
+function liveProjectSampleRate(project) {
+    // README names timelineSampleRate; do not invent other keys as primary.
+    if (project && isCallable(project, "GetSetting")) {
+        for (const key of ["timelineSampleRate", "audioSampleRate"]) {
+            const raw = callValue(project, "GetSetting", key);
+            const n = parseSampleRate(raw);
+            if (n) {
+                return {
+                    sampleRate: n,
+                    source: `project.GetSetting(${JSON.stringify(key)})=${JSON.stringify(raw)}`,
+                };
+            }
+        }
+    }
+    return { sampleRate: 48000, source: "default_48000" };
+}
+
 function inspectClip(row, ctx) {
     const item = row.item;
     const mp = row.mediaPoolItem;
@@ -295,6 +312,7 @@ function inspectSelection(resolve, options) {
         warnings.push("No clips selected. Select a clip on the Edit or Fairlight page.");
     }
 
+    const srInfo = liveProjectSampleRate(project);
     const payload = {
         ok: true,
         source: selected.source,
@@ -304,6 +322,8 @@ function inspectSelection(resolve, options) {
         timelineName: callValue(timeline, "GetName") || null,
         outFps: { num: fpsInfo.fps.num, den: fpsInfo.fps.den },
         outFpsSource: fpsInfo.source,
+        projectSampleRate: srInfo.sampleRate,
+        projectSampleRateSource: srInfo.source,
         handleS,
         clips,
         jobCount: jobClips.length,
@@ -318,5 +338,7 @@ module.exports = {
     inspectSelection,
     inspectClip,
     liveTimelineFps,
+    liveProjectSampleRate,
+    parseSampleRate,
     sourceTimes,
 };
