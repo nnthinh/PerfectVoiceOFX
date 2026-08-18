@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>PerfectVoice</title>
+    <script type="text/javascript" src="./renderer.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            margin: 20px;
+            color: #eee;
+            background: #1b1b1b;
+        }
+        h1 { font-size: 20px; margin: 0 0 4px; }
+        .sub { color: #aaa; margin: 0 0 16px; font-size: 13px; }
+        .row { margin: 8px 0; font-size: 13px; }
+        .ok { color: #6c6; }
+        .off { color: #e88; }
+        button {
+            padding: 8px 14px;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+        #enginePath, #health {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        #health {
+            background: #111;
+            padding: 8px;
+            min-height: 5em;
+            margin: 6px 0 0;
+        }
+        #error, #resolveNote { color: #e88; font-size: 12px; margin-top: 8px; }
+        hr { border: 0; border-top: 1px solid #333; margin: 20px 0 16px; }
+        .hint { color: #888; font-size: 12px; margin: 6px 0 0; }
+    </style>
+</head>
+<body>
+    <h1>PerfectVoice</h1>
+    <p class="sub">Remove musical accompaniment from timeline clips.</p>
+
+    <div class="row">Status: <span id="status" class="off">Engine not connected</span></div>
+    <div class="row">Engine: <span id="enginePath">…</span></div>
+    <p><button id="startBtn" type="button">Start engine</button></p>
+    <div class="row">Health</div>
+    <pre id="health">—</pre>
+    <p id="error"></p>
+    <p id="resolveNote"></p>
+
+    <hr>
+    <div class="row"><strong>Remove musical accompaniment</strong></div>
+    <p><button type="button" disabled>Remove musical accompaniment</button></p>
+    <p class="hint">Clip inspect, place, and jobs are not in this release.</p>
+</body>
+</html>
