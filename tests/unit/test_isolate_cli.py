@@ -110,6 +110,8 @@ class IsolateCliMissingWeightsTests(unittest.TestCase):
         self.assertTrue(err.startswith(MODEL_NOT_INSTALLED) or MODEL_NOT_INSTALLED in err)
         _assert_no_forbidden_hosts(hits)
         self.assertEqual(hits, [])
+        self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
+        self.assertEqual(os.environ.get("TRANSFORMERS_OFFLINE"), "1")
 
     def test_subprocess_empty_repo_exits_2(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -124,6 +126,9 @@ class IsolateCliMissingWeightsTests(unittest.TestCase):
             env["PYTHONPATH"] = os.pathsep.join(
                 [str(ENGINE_DIR), env.get("PYTHONPATH", "")]
             )
+            # Fail closed if require_model is ever skipped: child cannot Hub-fetch.
+            env["HF_HUB_OFFLINE"] = "1"
+            env["TRANSFORMERS_OFFLINE"] = "1"
             proc = subprocess.run(
                 [
                     sys.executable,
@@ -138,10 +143,23 @@ class IsolateCliMissingWeightsTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 env=env,
+                timeout=10,
             )
         self.assertEqual(proc.returncode, 2)
         self.assertIn("Model not installed", proc.stderr)
         self.assertEqual(proc.stdout, "")
+
+    def test_usage_error_is_exit_1_not_2(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = isolate_cli.main([])
+        self.assertEqual(code, 1)
+        self.assertNotIn("Model not installed", stderr.getvalue())
+
+    def test_no_official_remotes_in_cli_source(self) -> None:
+        text = (SCRIPTS_DIR / "isolate_cli.py").read_text(encoding="utf-8")
+        self.assertNotIn("huggingface.co/adefossez", text)
+        self.assertNotIn("dl.fbaipublicfiles.com", text)
 
     def test_empty_repo_does_not_call_urlopen(self) -> None:
         calls: list[object] = []

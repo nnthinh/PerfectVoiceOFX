@@ -2,11 +2,14 @@
 """Dogfood vocal isolation without DaVinci Resolve.
 
 Local weights only. Missing repo → exit 2, no network, no Separator.
+Exit 1 is usage (including argparse). Exit 2 is reserved for
+``Model not installed``.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -34,14 +37,23 @@ EXIT_USAGE = 1
 EXIT_MODEL_NOT_INSTALLED = 2
 
 
+class _ArgumentParser(argparse.ArgumentParser):
+    """Map argparse failures to ArgumentError so usage is exit 1, not 2."""
+
+    def error(self, message: str) -> None:
+        raise argparse.ArgumentError(None, message)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
+    parser = _ArgumentParser(
         prog="isolate_cli",
         description=(
             "Isolate vocals from a WAV without Resolve. "
             "Uses local Demucs weights only; never downloads."
         ),
     )
+    # 3.9+: parse_args raises ArgumentError instead of SystemExit(2).
+    parser.exit_on_error = False
     parser.add_argument("input", type=Path, help="Input WAV")
     parser.add_argument("output_dir", type=Path, help="Directory for isolated WAV")
     parser.add_argument(
@@ -90,7 +102,16 @@ def _separate_and_write(src: Path, dest_dir: Path, model: str, repo: Path) -> in
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+    # Process-lifetime offline. isolate_cli must never Hub/AWS-fetch;
+    # download lives in download_demucs.py / PR 15. No restore — this
+    # process does not host a later in-process click-fetch.
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    try:
+        args = parse_args(argv)
+    except argparse.ArgumentError as exc:
+        print(f"isolate_cli: error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     src = Path(args.input)
     if not src.is_file():
         print(f"input not found: {src}", file=sys.stderr)
