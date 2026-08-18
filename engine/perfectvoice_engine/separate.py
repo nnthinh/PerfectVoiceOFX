@@ -3,6 +3,9 @@
 Infer constructs ``Separator(model=..., repo=Path(local_repo))`` after the
 weight files hash. A pretrained name with no ``repo=`` would Hub/AWS-fetch
 in Demucs 4.1.0; that path is not used here.
+
+``vocals_only_bag`` reads the local ft bag YAML, then loads signature
+``04573f0d``. The ``.th`` path is never hardcoded; LocalRepo resolves it.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from perfectvoice_engine.models import (
     VOCALS_ONLY_SIG,
     ModelNotInstalled,
     require_model,
+    require_vocals_only_bag,
     weights_sha256,
 )
 from perfectvoice_engine.resample import MODEL_SAMPLE_RATE
@@ -367,8 +371,13 @@ def _separate_windowed(
 def separate_vocals(req: SeparateRequest, local_repo: Path) -> SeparateResult:
     """Separator(model=..., repo=local_repo) only. Never load a name without repo=."""
     repo = Path(local_repo)
-    name = separator_model_name(req)
-    files = require_model(name, repo)
+    if req.vocals_only_bag:
+        # YAML first, then the signature. Do not pass a .th filename.
+        files = require_vocals_only_bag(repo)
+        name = VOCALS_ONLY_SIG
+    else:
+        name = req.model
+        files = require_model(name, repo)
     wav = _as_channels_first(req.wav_44100_stereo)
     device = resolve_device(req.device)
     windowed = should_window(int(wav.shape[-1]), int(wav.shape[0]), MODEL_SAMPLE_RATE)

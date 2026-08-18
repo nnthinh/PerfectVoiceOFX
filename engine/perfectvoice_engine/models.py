@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Mapping
@@ -22,7 +23,10 @@ from typing import Mapping
 DEFAULT_MODEL = "htdemucs"
 QUALITY_MODEL = "htdemucs_ft"
 # Vocals specialist inside the htdemucs_ft bag (flag off until A/B).
+# Load reads the local bag YAML, then Separator(sig, repo=). Never a .th path.
 VOCALS_ONLY_SIG = "04573f0d"
+_BAG_SIG = re.compile(r"[0-9a-fA-F]{8}")
+_BAG_MODELS_KEY = re.compile(r"^models\s*:\s*(.*)$")
 ALLOWED_MODELS = frozenset({DEFAULT_MODEL, QUALITY_MODEL})
 MODEL_NOT_INSTALLED = (
     "Model not installed. [Download model] "
@@ -125,6 +129,81 @@ def local_repo_signature(filename: str) -> str | None:
     return stem
 
 
+def parse_bag_models(text: str) -> list[str]:
+    """Signatures from a Demucs bag YAML. Stdlib only — no PyYAML, no Hub."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.split("#", 1)[0].rstrip()
+        if stripped != stripped.lstrip():
+            continue
+        match = _BAG_MODELS_KEY.match(stripped)
+        if match is None:
+            continue
+        rest = match.group(1).strip()
+        if rest.startswith("["):
+            return [hit.group(0).lower() for hit in _BAG_SIG.finditer(rest)]
+        sigs: list[str] = []
+        for nxt in lines[i + 1 :]:
+            body = nxt.split("#", 1)[0]
+            if not body.strip():
+                continue
+            if not body[:1].isspace() and not body.lstrip().startswith("-"):
+                break
+            if not body.lstrip().startswith("-"):
+                continue
+            found = _BAG_SIG.search(body)
+            if found is not None:
+                sigs.append(found.group(0).lower())
+        return sigs
+    return []
+
+
+def _quality_bag_yaml(
+    manifest: Mapping[str, Mapping[str, str]] | None,
+) -> tuple[str, str]:
+    try:
+        files = files_for(QUALITY_MODEL, manifest)
+    except ValueError as exc:
+        raise ModelNotInstalled(VOCALS_ONLY_SIG, "bag YAML not in manifest") from exc
+    yamls = [(name, digest) for name, digest in files.items() if name.endswith(".yaml")]
+    if not yamls:
+        raise ModelNotInstalled(VOCALS_ONLY_SIG, "bag YAML not in manifest")
+    preferred = f"{QUALITY_MODEL}.yaml"
+    yamls.sort(key=lambda item: (item[0] != preferred, item[0]))
+    return yamls[0]
+
+
+def require_listed_in_local_bag(
+    local_repo: Path,
+    sig: str = VOCALS_ONLY_SIG,
+    *,
+    manifest: Mapping[str, Mapping[str, str]] | None = None,
+) -> list[str]:
+    """Read the ft bag YAML already on disk. Missing / wrong list → not installed."""
+    repo = Path(local_repo)
+    if not repo.is_dir():
+        raise ModelNotInstalled(sig, "local repo missing")
+    yaml_name, expected = _quality_bag_yaml(manifest)
+    path = repo / yaml_name
+    if not path.is_file():
+        raise ModelNotInstalled(sig, f"{yaml_name} missing")
+    if sha256_file(path) != expected:
+        raise ModelNotInstalled(sig, f"{yaml_name} checksum mismatch")
+    listed = parse_bag_models(path.read_text(encoding="utf-8"))
+    if sig not in listed:
+        raise ModelNotInstalled(sig, f"{sig} not listed in {yaml_name}")
+    return listed
+
+
+def require_vocals_only_bag(
+    local_repo: Path,
+    *,
+    manifest: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict[str, str]:
+    """YAML first, then the specialist .th LocalRepo would open. No hardcoded path."""
+    return require_model(VOCALS_ONLY_SIG, local_repo, manifest=manifest)
+
+
 def files_for(name: str, manifest: Mapping[str, Mapping[str, str]] | None = None) -> dict[str, str]:
     table = dict(manifest) if manifest is not None else load_manifest()
     if name in table:
@@ -160,6 +239,10 @@ def require_model(
     manifest: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, str]:
     """Verify ``name`` is present under ``local_repo``. Never opens a socket."""
+    if name == VOCALS_ONLY_SIG:
+        # Specialist is a bag member, not a bag name. YAML must list it
+        # locally before we accept the .th LocalRepo will open.
+        require_listed_in_local_bag(local_repo, name, manifest=manifest)
     files = files_for(name, manifest)
     repo = Path(local_repo)
     if not repo.is_dir():
