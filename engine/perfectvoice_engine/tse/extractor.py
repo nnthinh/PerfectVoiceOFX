@@ -150,12 +150,19 @@ def extract_target_speaker(
         gain = min_gain + (1.0 - min_gain) * (conf ** 1.5)
         frame_gains.append(gain)
 
-        if on_progress is not None and (idx % 10 == 0 or idx == total_frames - 1):
+        if on_progress is not None and (idx % 2 == 0 or idx == total_frames - 1):
+            chunk_pct = round(((idx + 1) / total_frames) * 100, 1)
+            dur_s = round(float(total_samples) / float(sample_rate), 2)
+            pos_s = round(float(end) / float(sample_rate), 2)
             on_progress({
-                "chunk": idx + 1,
+                "chunk_idx": idx + 1,
                 "total_chunks": total_frames,
+                "chunk_pct": chunk_pct,
                 "segment_offset": start,
                 "audio_length": total_samples,
+                "audio_dur_s": dur_s,
+                "current_pos_s": pos_s,
+                "message": f"Isolating target speaker voice ({chunk_pct}%)…",
             })
 
     if not frame_centers:

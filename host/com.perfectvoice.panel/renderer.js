@@ -516,9 +516,11 @@ window.addEventListener("DOMContentLoaded", async () => {
                 // 2. Update Current Pass Progress Bar & Text
                 if (currentBar) currentBar.style.width = `${chunkPct}%`;
                 if (currentPassTitle) {
-                    currentPassTitle.textContent = totalModels > 1
-                        ? `Model ${modelIdx}/${totalModels} · Shift ${shiftIdx}/${totalShifts} · Chunk ${chunkIdx}/${totalChunks}`
-                        : `Shift ${shiftIdx}/${totalShifts} · Chunk ${chunkIdx}/${totalChunks}`;
+                    currentPassTitle.textContent = data.stage_name || (
+                        currentPass === 1
+                            ? `Pass 1/2: Demucs Separation · Chunk ${chunkIdx}/${totalChunks}`
+                            : `Pass 2/2: Target Speaker Filter · Frame ${chunkIdx}/${totalChunks}`
+                    );
                 }
                 if (currentPassPctText) {
                     currentPassPctText.textContent = durS > 0
@@ -526,21 +528,18 @@ window.addEventListener("DOMContentLoaded", async () => {
                         : `${chunkPct}%`;
                 }
 
-                // 3. Smart Terminal Logging (Throttled per shift/model & key milestones)
-                const shiftKey = `${modelIdx}_${shiftIdx}`;
-                if (shiftKey !== lastShiftIdx) {
-                    const modelPrefix = totalModels > 1 ? `Model ${modelIdx}/${totalModels} · ` : "";
-                    appendLog(`🔄 ${modelPrefix}Shift ${shiftIdx}/${totalShifts} started (${totalChunks} chunks · ~${durS}s audio)...`);
-                    lastShiftIdx = shiftKey;
+                // 3. Smart Terminal Logging (Stage transitions & progress milestones)
+                const passKey = `${currentPass}_${shiftIdx}`;
+                if (passKey !== lastShiftIdx) {
+                    if (currentPass === 1) {
+                        appendLog(`[1/2] Separating background music & beats via Demucs (${totalChunks} chunks)...`);
+                    } else {
+                        appendLog(`[2/2] Filtering target speaker & suppressing background lyrics (-60dB)...`);
+                    }
+                    lastShiftIdx = passKey;
                 }
-                if (
-                    chunkIdx === 1 ||
-                    chunkIdx === Math.round(totalChunks / 2) ||
-                    chunkIdx === totalChunks
-                ) {
-                    appendLog(
-                        `Pass ${currentPass}/${totalPasses} · Chunk ${chunkIdx}/${totalChunks} · ${chunkPct}%`
-                    );
+                if (data.message && (chunkIdx === 1 || chunkIdx === totalChunks)) {
+                    appendLog(data.message);
                 }
             }
         });

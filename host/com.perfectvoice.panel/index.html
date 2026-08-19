@@ -279,19 +279,20 @@
         .stat-k { color: #666; }
         .stat-v { color: #eee; font-weight: 600; }
 
-        /* Terminal Activity Log */
+        /* Terminal Activity Log (Compact 1/2 height) */
         .job-log {
-            flex: 1; /* Takes all remaining vertical space inside monitor */
-            min-height: 40px;
+            height: 48px;
+            max-height: 48px;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 10.5px;
-            line-height: 1.45;
+            font-size: 10px;
+            line-height: 1.4;
             color: #ccc;
-            padding: 6px 10px;
+            padding: 5px 8px;
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-all;
             background: #0a0a0a;
+            border-top: 1px solid #1a1a1a;
         }
 
         /* 5. Hardware Telemetry Bar (Pinned at bottom) */
@@ -318,33 +319,6 @@
         }
         #jobError:empty { display: none; }
 
-        .mode-tabs {
-            display: flex;
-            background: #141414;
-            border: 1px solid #282828;
-            border-radius: 4px;
-            padding: 2px;
-            gap: 3px;
-        }
-        .mode-tab {
-            flex: 1;
-            padding: 5px 8px;
-            font-size: 11px;
-            font-weight: 600;
-            background: transparent;
-            color: #888;
-            border: none;
-            border-radius: 3px;
-            cursor: pointer;
-            transition: all 0.15s;
-            text-align: center;
-        }
-        .mode-tab.active {
-            background: #252525;
-            color: #3ee0c5;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-        }
-
         /* Model Download Progress */
         #dlWrap {
             background: #111;
@@ -370,7 +344,7 @@
         <header class="app-header">
             <div class="app-brand">
                 <span class="app-title">PerfectVoice</span>
-                <span class="app-tag">DaVinci Resolve Vocal Isolation</span>
+                <span class="app-tag">Target Speaker Isolation</span>
             </div>
             <div class="app-status-box">
                 <span id="statusDot" class="status-dot off"></span>
@@ -384,28 +358,14 @@
 
         <!-- 2. Controls Section -->
         <div class="controls-card">
-            <div style="background: #152420; border: 1px solid #1f4239; border-radius: 4px; padding: 8px 10px; font-size: 11px; line-height: 1.4; color: #76cfbf; margin-bottom: 8px;">
-                🎯 <strong>1-Click Target Speaker Isolation:</strong><br>
-                Place timeline playhead on the speaker's voice, select the clip, then click <strong>Clean voice</strong>.
+            <div style="background: #152420; border: 1px solid #1f4239; border-radius: 4px; padding: 7px 9px; font-size: 11px; line-height: 1.4; color: #76cfbf; margin-bottom: 6px;">
+                🎯 <strong>1-Click Voice Isolation:</strong><br>
+                Place timeline playhead on speaker's voice, select clip, then click <strong>Clean voice</strong>.
             </div>
 
             <div class="form-row">
                 <div class="label-row">
-                    <label for="speakerSelect">Speaker Voiceprint</label>
-                    <span id="speakerCount" class="val-badge">Auto (At Playhead)</span>
-                </div>
-                <div style="display: flex; gap: 6px;">
-                    <select id="speakerSelect" style="flex: 1;">
-                        <option value="">🎯 Auto-Sample at Playhead</option>
-                    </select>
-                    <button id="enrollBtn" class="btn-cancel" style="padding: 5px 9px; font-size: 11px; color: #3ee0c5; border-color: #2dbfa6;" title="Save profile from current selection" type="button">🎙️</button>
-                    <button id="delSpeakerBtn" class="btn-cancel" style="padding: 5px 9px; font-size: 11px;" title="Delete selected profile" type="button">✕</button>
-                </div>
-            </div>
-
-            <div class="form-row" style="margin-top: 6px;">
-                <div class="label-row">
-                    <label for="modelSelect">AI Separation Engine</label>
+                    <label for="modelSelect">AI Separation Preset</label>
                 </div>
                 <select id="modelSelect">
                     <option value="htdemucs" selected>Fast (Light Demucs + TSE)</option>
@@ -413,7 +373,7 @@
                 </select>
             </div>
 
-            <div class="checkbox-row" style="margin-top: 8px;">
+            <div class="checkbox-row" style="margin-top: 6px;">
                 <label class="check-opt">
                     <input id="muteCheck" type="checkbox">
                     <span>Mute original clips</span>

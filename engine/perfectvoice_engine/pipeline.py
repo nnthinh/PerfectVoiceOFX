@@ -312,6 +312,31 @@ def process_clip(
         model_frames = to_model_rate(frames, extracted.sample_rate)
         wav_ct = np.ascontiguousarray(model_frames.T, dtype=np.float32)
         raise_if_cancelled(cancel_event)
+        # Progress forwarders for 2-stage execution
+        def _demucs_progress(ev: dict[str, Any]) -> None:
+            if on_progress is None:
+                return
+            pct = float(ev.get("overall_pct", 0.0))
+            scaled_overall = round(pct * 0.5, 1)
+            fwd = dict(ev)
+            fwd["current_pass"] = 1
+            fwd["total_passes"] = 2
+            fwd["overall_pct"] = scaled_overall
+            fwd["stage_name"] = "Pass 1/2: Music & Beat Separation (Demucs)"
+            on_progress({"event": "progress", **fwd})
+
+        def _tse_progress(ev: dict[str, Any]) -> None:
+            if on_progress is None:
+                return
+            chunk_pct = float(ev.get("chunk_pct", 0.0))
+            scaled_overall = round(50.0 + (chunk_pct * 0.5), 1)
+            fwd = dict(ev)
+            fwd["current_pass"] = 2
+            fwd["total_passes"] = 2
+            fwd["overall_pct"] = scaled_overall
+            fwd["stage_name"] = "Pass 2/2: Target Speaker Filter (-60dB)"
+            on_progress({"event": "progress", **fwd})
+
         # 1. Demucs Vocal Separation (Removes background music, drums, bass, instruments)
         separated = separate_vocals(
             SeparateRequest(
@@ -323,7 +348,7 @@ def process_clip(
                 shifts=int(params["shifts"]),
                 vocals_only_bag=bool(params["vocals_only_bag"]),
                 cancel_event=cancel_event,
-                on_progress=_fwd_progress if on_progress is not None else None,
+                on_progress=_demucs_progress if on_progress is not None else None,
             ),
             repo,
         )
@@ -346,6 +371,15 @@ def process_clip(
                     embedding = profile.embedding
 
             if embedding is None:
+                if on_progress is not None:
+                    on_progress({
+                        "event": "progress",
+                        "overall_pct": 50.0,
+                        "current_pass": 2,
+                        "total_passes": 2,
+                        "stage_name": "Sampling speaker voiceprint",
+                        "message": "🎯 Extracting pure speaker voiceprint at playhead...",
+                    })
                 # Auto-sample pure speaker voiceprint from reference location at playhead
                 v_samples = vocals.shape[0]
                 sr = MODEL_SAMPLE_RATE
@@ -372,6 +406,7 @@ def process_clip(
                     embedding,
                     sample_rate=MODEL_SAMPLE_RATE,
                     cancel_event=cancel_event,
+                    on_progress=_tse_progress if on_progress is not None else None,
                 )
                 vocals = np.ascontiguousarray(isolated_arr.T, dtype=np.float32)
         raise_if_cancelled(cancel_event)
