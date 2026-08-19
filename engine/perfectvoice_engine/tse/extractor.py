@@ -60,9 +60,9 @@ def extract_target_speaker(
     device: torch.device | str | None = None,
     cancel_event: object | None = None,
     on_progress: Callable[[dict[str, object]], None] | None = None,
-    sim_threshold_low: float = 0.25,
-    sim_threshold_high: float = 0.50,
-    min_gain_db: float = -34.0,
+    sim_threshold_low: float = 0.20,
+    sim_threshold_high: float = 0.45,
+    min_gain_db: float = -60.0,
 ) -> np.ndarray:
     """Isolate target speaker voice by discriminative voiceprint similarity gating.
 

@@ -237,6 +237,7 @@ function validInteger(val, min, max, fallback) {
 
 function buildParams(outputDir, roots, options) {
     const opts = options || {};
+    const isTse = opts.mode === "tse";
     const params = {
         schema: "perfectvoice.params.v1",
         model: resolveModel(opts),
@@ -245,7 +246,7 @@ function buildParams(outputDir, roots, options) {
         overlap: validNumber(opts.overlap, 0, 0.99, DEFAULT_OVERLAP),
         shifts: validInteger(opts.shifts, 1, 16, DEFAULT_SHIFTS),
         vocals_only_bag: false,
-        wet: validNumber(opts.wet, 0, 1, DEFAULT_WET),
+        wet: isTse ? 1.0 : validNumber(opts.wet, 0, 1, DEFAULT_WET),
         output_gain_db: opts.outputGainDb != null ? Number(opts.outputGainDb) : 0,
         mono: Boolean(opts.mono),
         sample_format: opts.sampleFormat || "pcm24",
