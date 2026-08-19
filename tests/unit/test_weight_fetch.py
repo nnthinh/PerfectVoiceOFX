@@ -43,6 +43,7 @@ from perfectvoice_engine import serve as serve_mod  # noqa: E402
 from perfectvoice_engine.serve import EngineHTTPServer, JobStore  # noqa: E402
 from perfectvoice_engine.weight_fetch import (  # noqa: E402
     ALLOWED_URL_PREFIXES,
+    _ssl_context,
     FB_HYBRID,
     HF_CACHE_HTDEMUCS,
     HF_CACHE_HTDEMUCS_FT,
@@ -108,6 +109,11 @@ def _mock_urlopen(payloads: dict[str, bytes], hits: list[str], *, prefer_fb: boo
 
 
 class AllowlistTests(unittest.TestCase):
+    def test_ssl_context_still_verifies(self) -> None:
+        ctx = _ssl_context()
+        self.assertEqual(ctx.verify_mode, __import__("ssl").CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+
     def test_official_prefixes_are_listed(self) -> None:
         self.assertEqual(
             ALLOWED_URL_PREFIXES,

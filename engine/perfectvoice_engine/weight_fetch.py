@@ -10,6 +10,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import ssl
 import tempfile
 import urllib.error
 import urllib.request
@@ -133,6 +134,33 @@ class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _ca_file() -> str | None:
+    """CPython.org on macOS ships without a trust store until certifi is installed."""
+    try:
+        import certifi
+
+        path = certifi.where()
+        if path and Path(path).is_file():
+            return path
+    except ImportError:
+        pass
+    for candidate in (
+        "/etc/ssl/cert.pem",
+        "/opt/homebrew/etc/openssl@3/cert.pem",
+        "/usr/local/etc/openssl@3/cert.pem",
+    ):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def _ssl_context() -> ssl.SSLContext:
+    ca = _ca_file()
+    if ca:
+        return ssl.create_default_context(cafile=ca)
+    return ssl.create_default_context()
+
+
 def _urlopen(url: str, timeout: float | None = 120.0):
     assert_url_allowed(url)
     req = urllib.request.Request(
@@ -140,7 +168,10 @@ def _urlopen(url: str, timeout: float | None = 120.0):
         method="GET",
         headers={"User-Agent": _UA},
     )
-    opener = urllib.request.build_opener(_AllowlistRedirectHandler)
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=_ssl_context()),
+        _AllowlistRedirectHandler,
+    )
     return opener.open(req, timeout=timeout)
 
 

@@ -2,3 +2,4 @@
 jsonschema>=4.18
 numpy>=1.24
 soxr>=0.5
+certifi>=2024.0.0
