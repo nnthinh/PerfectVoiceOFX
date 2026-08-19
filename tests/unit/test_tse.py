@@ -9,15 +9,30 @@ Tests:
 from __future__ import annotations
 
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ENGINE_DIR = REPO_ROOT / "engine"
+if str(ENGINE_DIR) not in sys.path:
+    sys.path.insert(0, str(ENGINE_DIR))
+
+def _has_torch() -> bool:
+    try:
+        import torch  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 
 class SpeakerEncoderTests(unittest.TestCase):
     def test_embedding_dim_and_normalization(self) -> None:
+        if not _has_torch():
+            self.skipTest("PyTorch required for TSE neural encoder tests")
         from perfectvoice_engine.tse import EMBEDDING_DIM, extract_embedding
 
         sr = 44100
@@ -36,6 +51,8 @@ class SpeakerEncoderTests(unittest.TestCase):
         self.assertAlmostEqual(norm, 1.0, places=4)
 
     def test_same_audio_produces_identical_embedding(self) -> None:
+        if not _has_torch():
+            self.skipTest("PyTorch required for TSE neural encoder tests")
         from perfectvoice_engine.tse import extract_embedding
 
         sr = 44100
@@ -88,6 +105,8 @@ class SpeakerStoreTests(unittest.TestCase):
 
 class TSEExtractorTests(unittest.TestCase):
     def test_extractor_shape_and_ola(self) -> None:
+        if not _has_torch():
+            self.skipTest("PyTorch required for TSE neural extractor tests")
         from perfectvoice_engine.tse import extract_target_speaker
 
         sr = 44100
@@ -105,6 +124,8 @@ class TSEExtractorTests(unittest.TestCase):
 
 class SidecarSpeakerHttpTests(unittest.TestCase):
     def test_enroll_endpoint(self) -> None:
+        if not _has_torch():
+            self.skipTest("PyTorch required for TSE HTTP endpoint tests")
         from perfectvoice_engine.ffmpeg_io import write_wav
         from perfectvoice_engine.serve import EngineHTTPServer, JobStore
         import http.client
