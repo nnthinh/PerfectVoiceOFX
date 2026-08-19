@@ -35,13 +35,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     const tabMusic = document.getElementById("tabMusic");
     const tabTse = document.getElementById("tabTse");
     const musicControls = document.getElementById("musicControls");
-    const tseControls = document.getElementById("tseControls");
     const speakerSelect = document.getElementById("speakerSelect");
     const speakerCount = document.getElementById("speakerCount");
     const enrollBtn = document.getElementById("enrollBtn");
     const delSpeakerBtn = document.getElementById("delSpeakerBtn");
 
-    let currentMode = "music";
+    let currentMode = "tse";
     let enrolledSpeakers = [];
     let lastStatus = null;
     let lastInspect = null;
@@ -250,28 +249,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         }
     }
 
-    function setMode(mode) {
-        currentMode = mode;
-        if (mode === "tse") {
-            if (tabTse) tabTse.classList.add("active");
-            if (tabMusic) tabMusic.classList.remove("active");
-            if (tseControls) tseControls.style.display = "block";
-            if (musicControls) musicControls.style.display = "none";
-            loadSpeakers();
-            appendLog("Switched to Target Speaker Extraction (TSE) Mode.");
-            appendLog("TSE isolates the enrolled speaker and eliminates background singing vocals.");
-        } else {
-            if (tabMusic) tabMusic.classList.add("active");
-            if (tabTse) tabTse.classList.remove("active");
-            if (musicControls) musicControls.style.display = "block";
-            if (tseControls) tseControls.style.display = "none";
-            appendLog("Switched to Music & Beats (Demucs) Mode.");
-        }
-        syncRunButtons();
-    }
 
-    if (tabMusic) tabMusic.addEventListener("click", () => setMode("music"));
-    if (tabTse) tabTse.addEventListener("click", () => setMode("tse"));
 
     if (enrollBtn) {
         enrollBtn.addEventListener("click", async () => {
@@ -321,12 +299,12 @@ window.addEventListener("DOMContentLoaded", async () => {
             dfn: false,
             muteOriginal: !!(muteCheck && muteCheck.checked),
             useCache: !(cacheCheck && !cacheCheck.checked),
-            wet: wetInput ? Number(wetInput.value) : 0.85,
-            shifts: shiftsSelect ? parseInt(shiftsSelect.value, 10) : 1,
-            overlap: overlapSelect ? Number(overlapSelect.value) : 0.25,
-            mode: currentMode,
+            wet: 1.0,
+            shifts: 1,
+            overlap: 0.25,
+            mode: "tse",
         };
-        if (currentMode === "tse" && speakerSelect && speakerSelect.value) {
+        if (speakerSelect && speakerSelect.value) {
             prefs.speaker_id = speakerSelect.value;
         }
         return prefs;
@@ -335,15 +313,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     function applyPrefs(p) {
         if (!p) return;
         if (p.model && modelSelect) modelSelect.value = p.model;
-        if (p.wet != null && wetInput) {
-            wetInput.value = String(p.wet);
-            updateWetLabel(p.wet);
-        }
-        if (p.shifts != null && shiftsSelect) shiftsSelect.value = String(p.shifts);
-        if (p.overlap != null && overlapSelect) overlapSelect.value = String(p.overlap);
         if (p.muteOriginal != null && muteCheck) muteCheck.checked = !!p.muteOriginal;
         if (p.useCache != null && cacheCheck) cacheCheck.checked = !!p.useCache;
-        if (p.mode) setMode(p.mode);
     }
 
     function persistPrefs() {
@@ -367,16 +338,17 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
 
     function paintDownloadProgress(data) {
-        if (!dlWrap) return;
-        dlWrap.hidden = false;
-        const file = (data && data.filename) || selectedModel();
-        const done = Number(data && data.bytes_done);
-        const total = Number(data && data.bytes_total);
-        const pct = total > 0 && Number.isFinite(done) ? Math.min(100, Math.round((100 * done) / total)) : 0;
+        if (!data || typeof data !== "object") return;
+        downloading = true;
+        if (dlWrap) dlWrap.hidden = false;
+        const done = Number(data.bytes_done) || 0;
+        const total = Number(data.bytes_total) || 0;
+        const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
         if (dlBar) dlBar.style.width = `${pct}%`;
+        const file = data.filename || "weights";
         if (dlLabel) {
             dlLabel.textContent = total > 0
-                ? `Downloading ${file}… ${pct}%`
+                ? `Downloading ${file} (${pct}%)`
                 : `Downloading ${file}…`;
         }
         if (dlLog) {
@@ -395,7 +367,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
 
     function syncRunButtons() {
-        const isTse = currentMode === "tse";
         const ready = isModelReady(lastStatus, selectedModel());
         const busy = jobRunning || downloading;
         if (removeBtn) removeBtn.disabled = busy || !ready;
@@ -403,9 +374,6 @@ window.addEventListener("DOMContentLoaded", async () => {
             cancelBtn.disabled = true;
         }
         if (modelSelect) modelSelect.disabled = busy;
-        if (wetInput) wetInput.disabled = busy;
-        if (shiftsSelect) shiftsSelect.disabled = busy;
-        if (overlapSelect) overlapSelect.disabled = busy;
         if (muteCheck) muteCheck.disabled = busy;
         if (cacheCheck) cacheCheck.disabled = busy;
         if (speakerSelect) speakerSelect.disabled = busy;
@@ -421,9 +389,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         } else {
             if (logEntries.length === 0 && jobLog) {
                 setBadge("idle", "Ready");
-                jobLog.textContent = isTse
-                    ? "Target Speaker Ready. Place playhead on speaker's voice, then click Clean voice."
-                    : "Ready. Select a clip with audio, then click Clean voice.";
+                jobLog.textContent = "Ready. Place playhead on speaker's voice, select clip, then click Clean voice.";
             }
         }
     }
