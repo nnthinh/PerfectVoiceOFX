@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 420" role="img" aria-label="PerfectVoice">
+  <title>PerfectVoice</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#121316"/>
+      <stop offset="55%" stop-color="#0b0c0e"/>
+      <stop offset="100%" stop-color="#070708"/>
+    </linearGradient>
+    <linearGradient id="voice" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1aa889"/>
+      <stop offset="45%" stop-color="#3ee0c5"/>
+      <stop offset="100%" stop-color="#e8fff8"/>
+    </linearGradient>
+    <linearGradient id="bed" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3a3d44" stop-opacity="0.15"/>
+      <stop offset="50%" stop-color="#6b7180" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#3a3d44" stop-opacity="0.1"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="22%" cy="48%" r="42%">
+      <stop offset="0%" stop-color="#3ee0c5" stop-opacity="0.22"/>
+      <stop offset="70%" stop-color="#3ee0c5" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="420" fill="url(#bg)"/>
+  <rect width="1280" height="420" fill="url(#glow)"/>
+
+  <!-- stacked accompaniment, then a single isolated voice -->
+  <g transform="translate(72, 210)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0-86 C70-40 120-132 200-58 S330-4 410-72 560-140 640-48 790 20 880-64 1020-20 1160-88" stroke="url(#bed)" stroke-width="10"/>
+    <path d="M0 78 C80 20 140 110 220 42 S360 96 440 18 590 88 670 8 820 70 910 4 1040 62 1160 16" stroke="url(#bed)" stroke-width="8"/>
+    <path d="M0-28 C90 24 150-70 240-6 S390-54 470 10 610-48 700-4 850-60 940 8 1080-36 1160-12" stroke="url(#bed)" stroke-width="6"/>
+    <path d="M0 0 C80-36 150 48 230-8 S390 40 470-16 630 28 720-10 870 34 960-6 1100 22 1160 0" stroke="url(#voice)" stroke-width="3.5" filter="url(#soft)" opacity="0.85"/>
+    <path d="M0 0 C80-36 150 48 230-8 S390 40 470-16 630 28 720-10 870 34 960-6 1100 22 1160 0" stroke="url(#voice)" stroke-width="2.25"/>
+  </g>
+
+  <text x="72" y="92" fill="#f4f1ea" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="52" font-weight="700" letter-spacing="-1.4">PerfectVoice</text>
+  <text x="74" y="128" fill="#9aa0ab" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="18" font-weight="500" letter-spacing="0.4">Strip the band. Keep the voice. On the Resolve timeline.</text>
+</svg>

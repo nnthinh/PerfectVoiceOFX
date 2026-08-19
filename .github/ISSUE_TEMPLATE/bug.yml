@@ -1,0 +1,44 @@
+name: Bug
+description: Something is wrong in the panel, engine, or installer.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        English is fine. Vietnamese is fine. Do not attach official Demucs weight files.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Panel / Resolve
+        - Engine / jobs
+        - Weights download
+        - macOS installer
+        - Windows installer
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Resolve
+      placeholder: "Studio 21.0.4 standalone (not Mac App Store)"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "macOS 15 arm64"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      placeholder: What you did, what you expected, what you got.
+    validations:
+      required: true

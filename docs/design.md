@@ -4,7 +4,7 @@
 | --- | --- |
 | **Document** | Design / Technical Plan |
 | **Product** | PerfectVoice (repo: `PerfectVoiceOFX`) |
-| **Author** | TBD |
+| **Author** | [nnthinh](https://github.com/nnthinh) |
 | **Date** | 2026-08-18 |
 | **Status** | Draft (rev 4 — 2026-08-18, user chốt OQ 1 + 6) |
 | **Host** | DaVinci Resolve **Studio standalone** (tải từ Blackmagic, **không** Mac App Store). **Min 20.0**; **test / recommended 21.0.4** (2026-08-05). 18.6 không hỗ trợ. |

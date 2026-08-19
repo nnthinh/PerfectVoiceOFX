@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="PerfectVoice mark">
+  <title>PerfectVoice</title>
+  <defs>
+    <linearGradient id="m" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0f1114"/>
+      <stop offset="100%" stop-color="#1b1e24"/>
+    </linearGradient>
+    <linearGradient id="v" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1aa889"/>
+      <stop offset="100%" stop-color="#3ee0c5"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#m)"/>
+  <g fill="none" stroke-linecap="round" transform="translate(18,64)">
+    <path d="M0-22 C12-8 22-30 34-12 S56 8 68-16 86-28 92-6" stroke="#5c6370" stroke-width="4" opacity="0.45"/>
+    <path d="M0 20 C14 6 24 26 36 8 S58 24 70 4 88 18 92 8" stroke="#5c6370" stroke-width="3.2" opacity="0.35"/>
+    <path d="M0 0 C14-14 26 16 40-4 S64 14 76-2 88 8 92 0" stroke="url(#v)" stroke-width="5"/>
+  </g>
+</svg>

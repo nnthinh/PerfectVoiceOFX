@@ -1,72 +1,153 @@
 # PerfectVoice
 
-**Workflow Integration** panel + Python sidecar cho [DaVinci Resolve](https://www.blackmagicdesign.com/products/davinciresolve) **Studio**. Tách **giọng thoại khỏi nhạc nền / musical accompaniment** ngay trên timeline bằng Meta **Demucs** (`htdemucs` / `htdemucs_ft`).
+[![CI](https://github.com/nnthinh/PerfectVoiceOFX/actions/workflows/ci.yml/badge.svg)](https://github.com/nnthinh/PerfectVoiceOFX/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-3ee0c5?labelColor=111)](LICENSE)
+[![Host](https://img.shields.io/badge/host-DaVinci%20Resolve%20Studio-111?labelColor=111&color=e8e4dc)](https://www.blackmagicdesign.com/products/davinciresolve)
+[![macOS arm64](https://img.shields.io/badge/v1.0-macOS%2013%2B%20Apple%20Silicon-111?labelColor=111&color=9aa0ab)](#requirements)
 
-Tên repo là `PerfectVoiceOFX` vì đó là tên user đặt. **Host không phải OpenFX.** OpenFX trong Resolve là image-effect API; không có audio buffer chính thức. Sản phẩm sống ở **Workspace → Workflow Integrations → PerfectVoice**.
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="PerfectVoice — strip the band, keep the voice" width="100%">
+</p>
 
-## Đây là gì / không phải gì
+**Isolate dialogue from musical accompaniment inside [DaVinci Resolve](https://www.blackmagicdesign.com/products/davinciresolve) Studio.** Select clips on the Edit or Fairlight page, run *Remove musical accompaniment*, and get a new `PV Isolated Voice` track — sample-accurate, non-destructive, no trip through another app.
 
-Editor chọn clip trên Edit hoặc Fairlight → *Remove musical accompaniment* → sidecar Python/PyTorch xử lý **offline** → track audio mới `PV Isolated Voice`, đồng bộ sample-accurate. Clip gốc không bị ghi đè.
+The repo is named `PerfectVoiceOFX` because that is what the project was called on day one. **The host is not OpenFX.** Resolve’s OFX surface is an image-effect API. There is no official audio buffer. PerfectVoice lives at **Workspace → Workflow Integrations → PerfectVoice**: an Electron panel plus a localhost Python sidecar.
 
-**Demucs không phải denoiser** và không phải SOTA vocal isolation 2025–26. Nó là *music source separation* (drums / bass / other / vocals). Mạnh với bed nhạc; yếu với HVAC, giao thông, phòng, mic. Optional **DeepFilterNet 3** (default off) giảm residual environmental noise — không bật thì **không** claim “giọng trong trẻo”. Voice Isolation sẵn có trong Studio vẫn phù hợp hơn nếu tạp âm là noise, không phải bài hát.
+<p align="center"><img src="docs/assets/mark.svg" width="72" height="72" alt="PerfectVoice mark"></p>
 
-v1.0 **không** bundle pretrained weights. User click *Download model* lần đầu.
+## What it is
 
-Thiết kế đầy đủ: [docs/design.md](docs/design.md).
+```
+clip on timeline  →  inspect + reject  →  sidecar job
+                                          extract (ffmpeg)
+                                          resample (soxr)
+                                          Demucs vocals  (local weights only)
+                                          optional DeepFilterNet 3
+                                          wet/dry + BWF
+                 ←  place on "PV Isolated Voice"
+```
 
-## Yêu cầu (v1.0)
+- **Stage 1 (always):** Meta [Demucs](https://github.com/adefossez/demucs) `htdemucs` / `htdemucs_ft`. Music source separation — drums / bass / other / vocals.
+- **Stage 2 (off by default):** [DeepFilterNet 3](https://github.com/Rikorose/DeepFilterNet) for leftover environmental noise. If you leave it off, this tool does **not** claim “crystal-clear voice.”
+- **Cache** is a full identity hash (48 kHz vs 96 kHz is two keys). Re-run the same clip and you skip infer.
+- **Weights are not in the installer.** First use: click *Download model* (~84 MB Fast / ~330 MB Quality). Infer only loads `Separator(..., repo=<local path>)`. Jobs never phone home.
 
-| | |
+## What it is not
+
+| Not this | Why |
 | --- | --- |
-| OS | **macOS 13+ Apple Silicon (arm64)** only |
-| Host | **DaVinci Resolve Studio standalone 20.0+** (khuyến nghị **21.0.4**, 2026-08-05). Tải từ Blackmagic, **không** Mac App Store. 18.6 / 19.x không hỗ trợ. |
-| UI | English (panel, errors). Tài liệu tiếng Việt. |
-| Windows + NVIDIA CUDA | v1.1 — [installer/windows/](installer/windows/) (cu126, same IPC) |
-| Intel Mac / Linux | non-goal |
+| A denoiser | Demucs is trained for *songs*, not HVAC, traffic, or room tone. |
+| SOTA 2026 vocal isolation | BS-RoFormer / Mel-RoFormer usually score higher. Demucs is the honest, local, inspectable stack. |
+| A replacement for Resolve Voice Isolation | Use Voice Isolation first when the problem is *noise*. Use PerfectVoice when the problem is *a song under the line*. |
+| An OpenFX / VST plugin | Offline sidecar. HTDemucs wants seconds of audio, not a 10–43 ms Fairlight buffer. |
+| A weight redistributor | Official checkpoints are **not MIT**. See [NOTICE](NOTICE) and [facebookresearch/demucs#327](https://github.com/facebookresearch/demucs/issues/327). |
 
-Free Resolve không có Workflow Integration Electron. Studio standalone là bắt buộc.
+Full design (Vietnamese): [docs/design.md](docs/design.md).
 
-## Model weights
+## Requirements
 
-Installer **không** chứa official `htdemucs*` checkpoints.
+| | v1.0 |
+| --- | --- |
+| OS | **macOS 13+ Apple Silicon** |
+| Host | **DaVinci Resolve Studio standalone 20.0+** (recommended **21.0.4**). Download from Blackmagic, **not** the Mac App Store. |
+| Free Resolve | No Workflow Integration Electron → **not supported** |
+| UI | English. Docs in Vietnamese. |
+| Windows + NVIDIA CUDA | v1.1 path in [`installer/windows/`](installer/windows/) |
+| Intel Mac / Linux | Non-goal |
 
-1. User click **Download model** trên panel (~84 MB Fast / ~330 MB Quality).
-2. File nằm local (`~/Library/Application Support/PerfectVoice/models/demucs/` trên macOS).
-3. Infer chỉ `Separator(..., repo=<local path>)`. Không auto-fetch khi chạy job.
+## Quick start (macOS)
 
-Dev được phép tải official weights bằng `scripts/download_demucs.py`.
-User click *Download model* → `POST /v1/models/download` (cùng fetcher).
+The public tree is a **working dogfood**. The `.pkg` currently stages a spawn-contract **hello-engine** stub. Production infer is the Python sidecar until a PyInstaller onedir lands.
 
-Official weights **không** MIT. Alexandre Défossez, [facebookresearch/demucs#327](https://github.com/facebookresearch/demucs/issues/327) (2022-05-23): *“The model weights are not covered by the MIT license, and are provided only for scientific purposes.”* Click *Download model* không tạo sublicense. Chi tiết: [NOTICE](NOTICE), [docs/licenses/](docs/licenses/).
+```bash
+git clone https://github.com/nnthinh/PerfectVoiceOFX.git
+cd PerfectVoiceOFX
 
-## Cây repo
+# 1. Panel — user-space only, will not touch /Library plugins
+bash host/com.perfectvoice.panel/install-user.sh
 
+# 2. Engine stub (spawn + /health). Optional until the onedir exists:
+bash installer/macos/install-user.sh
+
+# 3. Weights — you click this. It is not a sublicense.
+python3 scripts/download_demucs.py htdemucs
+
+# 4. Restart Resolve Studio → Workspace → Workflow Integrations → PerfectVoice
 ```
-docs/design.md                 # design (rev 4)
-docs/licenses/                 # Demucs MIT + weights disclaimer
-host/com.perfectvoice.panel/   # Workflow Integration panel
-engine/perfectvoice_engine/    # localhost sidecar (`perfectvoice-engine serve`)
-engine/models/                 # không commit weights
-shared/schema/                 # clip / params / job / hash-fields JSON Schema v1
-shared/openapi.yaml            # localhost HTTP including POST /v1/models/download
-installer/macos/
-installer/windows/
-scripts/                       # CI URL gate; download_demucs.py
-tests/unit/
-tests/golden/
+
+Dump a live selection (Studio must be open, clip selected):
+
+```bash
+python3 scripts/spikes/dump_resolve_selection.py --out /tmp/pv-selection-dump.json
 ```
 
-## Schema contracts
+Dogfood without Resolve:
 
-`shared/schema/` is the clip / params / job v1 contract. Client params **must not** send `wet_dry_sample_rate` (engine-derived). `handles_*_actual` lives on the job result only.
-
+```bash
+python3 scripts/isolate_cli.py /path/to/clip.wav /tmp/pv-out htdemucs
 ```
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Resolve Studio
+    TL[Timeline selection]
+    WI[Workflow Integration panel]
+    TR[PV Isolated Voice]
+  end
+  subgraph Sidecar["127.0.0.1 sidecar"]
+    API["HTTP + token + SSE"]
+    PIPE[extract → Demucs → blend]
+    CACHE[(identity cache)]
+  end
+  TL --> WI
+  WI -->|POST /v1/jobs| API --> PIPE
+  PIPE --> CACHE
+  PIPE -->|BWF + handles_*_actual| WI --> TR
+```
+
+The sidecar binds **localhost only**. Auth is a token file or stdin — never `--token-fd 3`. Missing weights fail closed.
+
+## Tests
+
+```bash
 python3 -m pip install -r requirements-dev.txt
-python3 -m unittest tests.unit.test_schemas tests.unit.test_serve tests.unit.test_weight_fetch tests.unit.test_resample_sync tests.unit.test_blend
+bash scripts/ci_forbid_demucs_urls.sh
+python3 -m unittest tests.unit.test_schemas tests.unit.test_serve tests.unit.test_weight_fetch \
+  tests.unit.test_resample_sync tests.unit.test_blend
 python3 -m unittest tests.golden.test_sync tests.golden.test_cache_keys tests.golden.test_appendix_a
+node --test host/com.perfectvoice.panel/resolve/*.test.js host/com.perfectvoice.panel/engine.test.js
 ```
+
+`shared/schema/` is the clip / params / job v1 contract. Clients must not send `wet_dry_sample_rate`. `handles_*_actual` is job-result only.
+
+## Status
+
+Public preview. First open-source release.
+
+| Done | Next |
+| --- | --- |
+| Panel + sidecar + reject matrix | Live Resolve dump to pin speed / reverse / Elastic Wave keys |
+| User-click official weight fetch | PyInstaller onedir (no user Python) |
+| macOS user-space installer | Developer ID + notarize |
+| Windows installer sketches | CUDA engine SKU |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md). Security: [SECURITY.md](SECURITY.md).
 
 ## License
 
-- Code PerfectVoice: [MIT](LICENSE), Copyright 2026 PerfectVoice contributors.
-- Third-party: [NOTICE](NOTICE).
+- PerfectVoice source: [MIT](LICENSE), Copyright 2026 PerfectVoice contributors.
+- Third-party and **Demucs weight terms**: [NOTICE](NOTICE), [docs/licenses/](docs/licenses/).
+
+---
+
+### Tiếng Việt
+
+Plugin **Workflow Integration** cho DaVinci Resolve **Studio**: chọn clip → *Remove musical accompaniment* → track `PV Isolated Voice` đồng bộ sample. Engine là sidecar Python (Demucs local), **không** phải OpenFX.
+
+- Mạnh với **nhạc nền / beat**. Yếu với ồn phòng, HVAC, đường.
+- Không bundle checkpoint. User tự click *Download model*.
+- Thiết kế đầy đủ: [docs/design.md](docs/design.md).
