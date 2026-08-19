@@ -258,6 +258,8 @@ function buildParams(outputDir, roots, options) {
     };
     if (opts.mode) params.mode = opts.mode;
     if (opts.speaker_id) params.speaker_id = opts.speaker_id;
+    if (opts.ref_sample_t0 != null) params.ref_sample_t0 = Number(opts.ref_sample_t0);
+    if (opts.ref_sample_t1 != null) params.ref_sample_t1 = Number(opts.ref_sample_t1);
     return params;
 }
 

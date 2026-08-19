@@ -106,6 +106,14 @@
     },
     "speaker_id": {
       "type": "string"
+    },
+    "ref_sample_t0": {
+      "type": "number",
+      "minimum": 0
+    },
+    "ref_sample_t1": {
+      "type": "number",
+      "minimum": 0
     }
   }
 }

@@ -226,22 +226,22 @@ window.addEventListener("DOMContentLoaded", async () => {
                 enrolledSpeakers = res.speakers;
                 if (speakerSelect) {
                     speakerSelect.innerHTML = "";
-                    if (enrolledSpeakers.length === 0) {
+                    const autoOpt = document.createElement("option");
+                    autoOpt.value = "";
+                    autoOpt.textContent = "🎯 Auto-Sample at Playhead";
+                    speakerSelect.appendChild(autoOpt);
+
+                    for (const spk of enrolledSpeakers) {
                         const opt = document.createElement("option");
-                        opt.value = "";
-                        opt.textContent = "No speaker profiles yet";
+                        opt.value = spk.speaker_id;
+                        opt.textContent = `👤 ${spk.name} (${spk.sample_duration_s}s)`;
                         speakerSelect.appendChild(opt);
-                    } else {
-                        for (const spk of enrolledSpeakers) {
-                            const opt = document.createElement("option");
-                            opt.value = spk.speaker_id;
-                            opt.textContent = `👤 ${spk.name} (${spk.sample_duration_s}s)`;
-                            speakerSelect.appendChild(opt);
-                        }
                     }
                 }
                 if (speakerCount) {
-                    speakerCount.textContent = `${enrolledSpeakers.length} profile${enrolledSpeakers.length === 1 ? "" : "s"}`;
+                    speakerCount.textContent = enrolledSpeakers.length > 0
+                        ? `${enrolledSpeakers.length} saved`
+                        : "Auto (Playhead)";
                 }
                 syncRunButtons();
             }
@@ -396,9 +396,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     function syncRunButtons() {
         const isTse = currentMode === "tse";
-        const ready = isTse
-            ? (enrolledSpeakers.length > 0 && speakerSelect && !!speakerSelect.value)
-            : isModelReady(lastStatus, selectedModel());
+        const ready = isModelReady(lastStatus, selectedModel());
         const busy = jobRunning || downloading;
         if (removeBtn) removeBtn.disabled = busy || !ready;
         if (!jobRunning && cancelBtn) {
@@ -418,18 +416,13 @@ window.addEventListener("DOMContentLoaded", async () => {
             setBadge("idle", "Starting");
             if (logEntries.length === 0 && jobLog) jobLog.textContent = "Starting engine…";
         } else if (!ready) {
-            if (isTse) {
-                setBadge("idle", "No Speaker");
-                if (logEntries.length === 0 && jobLog) jobLog.textContent = "Select a clip with clean speech and click 'Enroll Speaker'.";
-            } else {
-                setBadge("idle", "Downloading");
-                if (logEntries.length === 0 && jobLog) jobLog.textContent = "Model not ready. Downloading…";
-            }
+            setBadge("idle", "Downloading");
+            if (logEntries.length === 0 && jobLog) jobLog.textContent = "Model not ready. Downloading…";
         } else {
             if (logEntries.length === 0 && jobLog) {
                 setBadge("idle", "Ready");
                 jobLog.textContent = isTse
-                    ? "TSE Ready. Select a clip on timeline, then click Clean voice."
+                    ? "Target Speaker Ready. Place playhead on speaker's voice, then click Clean voice."
                     : "Ready. Select a clip with audio, then click Clean voice.";
             }
         }

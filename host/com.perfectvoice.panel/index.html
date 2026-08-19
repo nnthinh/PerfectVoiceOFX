@@ -429,22 +429,22 @@
 
             <!-- TSE Mode Controls (Hidden by default) -->
             <div id="tseControls" style="display: none;">
-                <div class="form-row">
+                <div style="background: #152420; border: 1px solid #1f4239; border-radius: 4px; padding: 7px 9px; font-size: 11px; line-height: 1.4; color: #76cfbf;">
+                    🎯 <strong>1-Click Target Speaker Isolation:</strong><br>
+                    Place timeline playhead on the speaker's voice. PerfectVoice will auto-sample the speaker's voiceprint and isolate their voice in 1 click!
+                </div>
+                <div class="form-row" style="margin-top: 5px;">
                     <div class="label-row">
-                        <label for="speakerSelect">Enrolled Speaker Profile</label>
-                        <span id="speakerCount" class="val-badge">0 profiles</span>
+                        <label for="speakerSelect">Speaker Voiceprint</label>
+                        <span id="speakerCount" class="val-badge">Auto (At Playhead)</span>
                     </div>
                     <div style="display: flex; gap: 6px;">
                         <select id="speakerSelect" style="flex: 1;">
-                            <option value="">No speaker profiles yet</option>
+                            <option value="">🎯 Auto-Sample at Playhead</option>
                         </select>
-                        <button id="delSpeakerBtn" class="btn-cancel" style="padding: 5px 10px; font-size: 11px;" title="Delete selected profile" type="button">✕</button>
+                        <button id="enrollBtn" class="btn-cancel" style="padding: 5px 9px; font-size: 11px; color: #3ee0c5; border-color: #2dbfa6;" title="Save profile from current selection" type="button">🎙️</button>
+                        <button id="delSpeakerBtn" class="btn-cancel" style="padding: 5px 9px; font-size: 11px;" title="Delete selected profile" type="button">✕</button>
                     </div>
-                </div>
-                <div style="display: flex; gap: 6px; margin-top: 4px;">
-                    <button id="enrollBtn" class="btn-cancel" style="flex: 1; padding: 6px 10px; font-size: 11px; background: #162d27; border: 1px solid #2dbfa6; color: #3ee0c5; border-radius: 4px; cursor: pointer;" type="button">
-                        🎙️ Enroll Speaker from Selection
-                    </button>
                 </div>
             </div>
 

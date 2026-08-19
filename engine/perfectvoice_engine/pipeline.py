@@ -333,14 +333,43 @@ def process_clip(
         # 2. Target Speaker Extraction (Isolates target speaker from background sung lyrics)
         mode = str(params.get("mode") or "music")
         speaker_id = str(params.get("speaker_id") or "")
-        if mode == "tse" and speaker_id:
-            from perfectvoice_engine.tse import SpeakerStore, extract_target_speaker
-            store = SpeakerStore()
-            profile = store.get(speaker_id)
-            if profile is not None:
+        ref_t0 = params.get("ref_sample_t0")
+        ref_t1 = params.get("ref_sample_t1")
+
+        if mode == "tse":
+            from perfectvoice_engine.tse import SpeakerStore, extract_embedding, extract_target_speaker
+            embedding = None
+            if speaker_id:
+                store = SpeakerStore()
+                profile = store.get(speaker_id)
+                if profile is not None:
+                    embedding = profile.embedding
+
+            if embedding is None:
+                # Auto-sample pure speaker voiceprint from reference location at playhead
+                v_samples = vocals.shape[0]
+                sr = MODEL_SAMPLE_RATE
+                if ref_t0 is not None:
+                    s0 = max(0, int(float(ref_t0) * sr))
+                else:
+                    s0 = 0
+
+                if ref_t1 is not None and float(ref_t1) > (float(ref_t0 or 0)):
+                    s1 = min(v_samples, int(float(ref_t1) * sr))
+                else:
+                    s1 = min(v_samples, s0 + int(3.5 * sr))
+
+                if s1 <= s0 or (s1 - s0) < int(0.5 * sr):
+                    s0 = 0
+                    s1 = min(v_samples, int(3.5 * sr))
+
+                ref_slice = vocals[s0:s1, :].T  # [channels, samples]
+                embedding = extract_embedding(ref_slice, sample_rate=sr)
+
+            if embedding is not None:
                 isolated_arr = extract_target_speaker(
                     vocals.T,
-                    profile.embedding,
+                    embedding,
                     sample_rate=MODEL_SAMPLE_RATE,
                     cancel_event=cancel_event,
                 )
