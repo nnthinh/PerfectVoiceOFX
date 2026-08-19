@@ -1,7 +1,7 @@
 """Target Speaker Extractor (TSE Extractor).
 
 Isolates a target speaker's voice from background singing and competing speech
-conditioned on a 192-dimensional speaker embedding.
+conditioned on an ECAPA-TDNN 192-dimensional speaker embedding.
 """
 
 from __future__ import annotations
@@ -14,51 +14,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from perfectvoice_engine.constants import raise_if_cancelled
+from perfectvoice_engine.tse.encoder import EMBEDDING_DIM, extract_embedding
 
 N_FFT = 1024
 HOP_LENGTH = 256
 WIN_LENGTH = 1024
-EMBEDDING_DIM = 192
-
-
-class FiLM(nn.Module):
-    """Feature-wise Linear Modulation based on target speaker embedding."""
-
-    def __init__(self, embed_dim: int, channels: int) -> None:
-        super().__init__()
-        self.gamma = nn.Linear(embed_dim, channels)
-        self.beta = nn.Linear(embed_dim, channels)
-
-    def forward(self, x: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
-        # x: (B, C, F, T), e: (B, embed_dim)
-        g = self.gamma(e).unsqueeze(-1).unsqueeze(-1)
-        b = self.beta(e).unsqueeze(-1).unsqueeze(-1)
-        return (1.0 + g) * x + b
-
-
-class TSEBlock(nn.Module):
-    """Dense convolutional block with dilation and speaker FiLM modulation."""
-
-    def __init__(self, channels: int, dilation: int = 1, embed_dim: int = EMBEDDING_DIM) -> None:
-        super().__init__()
-        self.conv1 = nn.Conv2d(
-            channels,
-            channels,
-            kernel_size=3,
-            dilation=dilation,
-            padding=dilation,
-        )
-        self.norm1 = nn.BatchNorm2d(channels)
-        self.film = FiLM(embed_dim, channels)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size=1)
-        self.norm2 = nn.BatchNorm2d(channels)
-
-    def forward(self, x: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
-        res = x
-        h = F.relu(self.norm1(self.conv1(x)))
-        h = self.film(h, e)
-        h = self.norm2(self.conv2(h))
-        return F.relu(h + res)
 
 
 class TargetSpeakerModel(nn.Module):
@@ -68,32 +28,16 @@ class TargetSpeakerModel(nn.Module):
         self,
         embed_dim: int = EMBEDDING_DIM,
         channels: int = 64,
-        num_blocks: int = 6,
+        num_blocks: int = 4,
     ) -> None:
         super().__init__()
         self.in_conv = nn.Conv2d(2, channels, kernel_size=3, padding=1)
-        self.blocks = nn.ModuleList([
-            TSEBlock(channels, dilation=2 ** (i % 3), embed_dim=embed_dim)
-            for i in range(num_blocks)
-        ])
-        # Dual-path complex mask prediction (real and imaginary masks)
         self.out_conv = nn.Conv2d(channels, 2, kernel_size=3, padding=1)
 
     def forward(self, spec_complex: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
-        # spec_complex: (B, 2, F, T) -> [Real, Imag]
-        # e: (B, embed_dim)
         h = F.relu(self.in_conv(spec_complex))
-        for block in self.blocks:
-            h = block(h, e)
-        mask = torch.tanh(self.out_conv(h))  # Bounded complex mask
-        # Complex multiplication: (R + iI) * (Mr + iMi) = (R*Mr - I*Mi) + i(R*Mi + I*Mr)
-        r = spec_complex[:, 0]
-        i = spec_complex[:, 1]
-        mr = mask[:, 0]
-        mi = mask[:, 1]
-        target_r = r * mr - i * mi
-        target_i = r * mi + i * mr
-        return torch.stack([target_r, target_i], dim=1)
+        mask = torch.sigmoid(self.out_conv(h))
+        return spec_complex * mask
 
 
 _DEFAULT_TSE_MODEL: TargetSpeakerModel | None = None
@@ -116,111 +60,126 @@ def extract_target_speaker(
     device: torch.device | str | None = None,
     cancel_event: object | None = None,
     on_progress: Callable[[dict[str, object]], None] | None = None,
+    sim_threshold_low: float = 0.25,
+    sim_threshold_high: float = 0.50,
+    min_gain_db: float = -34.0,
 ) -> np.ndarray:
-    """Extract target speaker voice using conditioning speaker embedding vector.
+    """Isolate target speaker voice by discriminative voiceprint similarity gating.
 
     Args:
         waveform: Audio samples (C, T) in float32
-        embedding: 192-dim speaker voiceprint vector
-        sample_rate: Audio sample rate
-        device: Torch compute device (Apple Metal / CUDA / CPU)
+        embedding: 192-dim target speaker voiceprint vector
+        sample_rate: Audio sample rate (e.g. 44100)
+        device: Torch compute device (Apple Metal MPS / CPU)
+        cancel_event: Cancellation signal
+        on_progress: Callback for progress updates
+        sim_threshold_low: Cosine similarity below which voice is fully suppressed
+        sim_threshold_high: Cosine similarity above which voice is fully kept
+        min_gain_db: Background vocal attenuation floor in dB (e.g. -34 dB)
 
     Returns:
-        Isolated target speaker waveform (C, T) as float32 numpy array
+        Clean isolated target speaker waveform (C, T) as float32 numpy array
     """
     raise_if_cancelled(cancel_event)
 
-    if device is None:
-        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-
-    if isinstance(waveform, np.ndarray):
-        audio_t = torch.from_numpy(waveform).float()
+    if isinstance(waveform, torch.Tensor):
+        audio_np = waveform.detach().cpu().numpy().astype(np.float32)
     else:
-        audio_t = waveform.float()
+        audio_np = np.asarray(waveform, dtype=np.float32)
 
-    if audio_t.ndim == 1:
-        audio_t = audio_t.unsqueeze(0)  # (1, T)
+    if audio_np.ndim == 1:
+        audio_np = audio_np[np.newaxis, :]
 
-    num_channels, total_samples = audio_t.shape
-    embed_t = torch.tensor(embedding, dtype=torch.float32).unsqueeze(0).to(device)  # (1, 192)
+    num_channels, total_samples = audio_np.shape
+    target_vec = np.asarray(embedding, dtype=np.float32)
+    norm_t = np.linalg.norm(target_vec)
+    if norm_t > 1e-6:
+        target_vec = target_vec / norm_t
 
-    model = get_tse_model(device)
-    window = torch.hann_window(WIN_LENGTH, device=device)
+    min_gain = float(10.0 ** (min_gain_db / 20.0))  # e.g. ~0.02
 
-    # Process channel by channel with chunking for large files
-    isolated_channels = []
-    chunk_size = 44100 * 10  # 10 second chunks
-    hop_size = 44100 * 8    # 2 second overlap
+    # Frame parameters for speaker similarity analysis (750ms window, 187.5ms hop)
+    frame_len = max(int(sample_rate * 0.75), 1024)
+    hop_len = max(int(sample_rate * 0.1875), 256)
 
-    for ch in range(num_channels):
-        ch_audio = audio_t[ch:ch+1].to(device)
-        out_ch = torch.zeros_like(ch_audio)
-        weight_ch = torch.zeros_like(ch_audio)
+    # Compute mono mix for speaker voiceprint estimation
+    mono_audio = np.mean(audio_np, axis=0)
 
-        starts = list(range(0, total_samples, hop_size))
-        total_chunks = len(starts)
+    # Calculate frame starts
+    if total_samples <= frame_len:
+        starts = [0]
+    else:
+        starts = list(range(0, total_samples - frame_len // 2, hop_len))
 
-        for chunk_idx, start in enumerate(starts):
-            raise_if_cancelled(cancel_event)
-            end = min(total_samples, start + chunk_size)
-            chunk = ch_audio[:, start:end]
+    frame_centers = []
+    frame_gains = []
+    total_frames = len(starts)
 
-            if chunk.shape[-1] < WIN_LENGTH:
-                # Pad small remainder
-                pad_amt = WIN_LENGTH - chunk.shape[-1]
-                chunk = F.pad(chunk, (0, pad_amt))
-            else:
-                pad_amt = 0
+    for idx, start in enumerate(starts):
+        raise_if_cancelled(cancel_event)
+        end = min(total_samples, start + frame_len)
+        chunk = mono_audio[start:end]
+        center = (start + end) / 2.0
+        frame_centers.append(center)
 
-            # STFT
-            stft = torch.stft(
-                chunk,
-                n_fft=N_FFT,
-                hop_length=HOP_LENGTH,
-                win_length=WIN_LENGTH,
-                window=window,
-                return_complex=True,
-            )
-            spec_in = torch.stack([stft.real, stft.imag], dim=1)  # (1, 2, F, T)
+        # Check energy level
+        rms = float(np.sqrt(np.mean(chunk**2) + 1e-12))
+        if rms < 1e-4:
+            # Silence / ambient noise floor
+            frame_gains.append(min_gain)
+            continue
 
-            with torch.no_grad():
-                spec_out = model(spec_in, embed_t)
+        # Extract frame voiceprint
+        frame_embed = extract_embedding(chunk[np.newaxis, :], sample_rate=sample_rate, device=device)
+        norm_f = np.linalg.norm(frame_embed)
+        if norm_f > 1e-6:
+            frame_embed = frame_embed / norm_f
+            cos_sim = float(np.dot(frame_embed, target_vec))
+        else:
+            cos_sim = 0.0
 
-            complex_out = torch.complex(spec_out[:, 0], spec_out[:, 1])
-            chunk_reconstructed = torch.istft(
-                complex_out,
-                n_fft=N_FFT,
-                hop_length=HOP_LENGTH,
-                win_length=WIN_LENGTH,
-                window=window,
-                length=chunk.shape[-1],
-            )
+        # Map cosine similarity to confidence [0.0, 1.0]
+        if cos_sim <= sim_threshold_low:
+            conf = 0.0
+        elif cos_sim >= sim_threshold_high:
+            conf = 1.0
+        else:
+            conf = (cos_sim - sim_threshold_low) / (sim_threshold_high - sim_threshold_low)
 
-            if pad_amt > 0:
-                chunk_reconstructed = chunk_reconstructed[:, :-pad_amt]
+        # Calculate target gain
+        gain = min_gain + (1.0 - min_gain) * (conf ** 1.5)
+        frame_gains.append(gain)
 
-            # Cross-fade trapezoidal window for seamless OLA
-            fade_len = min(44100, chunk_reconstructed.shape[-1] // 4)
-            fade_w = torch.ones_like(chunk_reconstructed)
-            if fade_len > 0:
-                ramp = torch.linspace(0, 1, fade_len, device=device)
-                fade_w[:, :fade_len] = ramp
-                fade_w[:, -fade_len:] = ramp.flip(0)
+        if on_progress is not None and (idx % 10 == 0 or idx == total_frames - 1):
+            on_progress({
+                "chunk": idx + 1,
+                "total_chunks": total_frames,
+                "segment_offset": start,
+                "audio_length": total_samples,
+            })
 
-            out_ch[:, start:end] += chunk_reconstructed * fade_w
-            weight_ch[:, start:end] += fade_w
+    if not frame_centers:
+        return audio_np
 
-            if on_progress is not None:
-                on_progress({
-                    "chunk": chunk_idx + 1,
-                    "total_chunks": total_chunks,
-                    "segment_offset": start,
-                    "audio_length": total_samples,
-                })
+    # Smooth interpolation of gains across all sample points
+    sample_indices = np.arange(total_samples, dtype=np.float32)
+    gain_envelope = np.interp(
+        sample_indices,
+        np.array(frame_centers, dtype=np.float32),
+        np.array(frame_gains, dtype=np.float32),
+        left=frame_gains[0],
+        right=frame_gains[-1],
+    )
 
-        # Normalize by overlapping weights
-        weight_ch = torch.clamp(weight_ch, min=1e-4)
-        out_ch = out_ch / weight_ch
-        isolated_channels.append(out_ch.squeeze(0).cpu().numpy())
+    # Smooth the envelope with a moving average filter (~100ms) to eliminate transients
+    filter_size = max(int(sample_rate * 0.1), 3)
+    if filter_size % 2 == 0:
+        filter_size += 1
+    window = np.hanning(filter_size)
+    window /= np.sum(window)
+    gain_envelope_smoothed = np.convolve(gain_envelope, window, mode="same")
+    gain_envelope_smoothed = np.clip(gain_envelope_smoothed, min_gain, 1.0)
 
-    return np.stack(isolated_channels, axis=0).astype(np.float32)
+    # Apply the smooth gain envelope to each channel
+    isolated = audio_np * gain_envelope_smoothed[np.newaxis, :]
+    return isolated.astype(np.float32)
