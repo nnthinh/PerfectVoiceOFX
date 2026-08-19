@@ -7,7 +7,10 @@ on:
 jobs:
   check:
     name: URL gate, compile, Appendix A tests
-    runs-on: macos-latest
+    # macos-latest (15+/26) can hang forever on bind(127.0.0.1) —
+    # Local Network privacy prompt has no UI on the runner.
+    # Sidecar tests spawn a localhost engine and wait for READY.
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
