@@ -30,6 +30,42 @@ else
   echo "Install DaVinci Resolve Studio and copy it from Help > Documentation > Developer." >&2
 fi
 
+# DEV: prefer the Python sidecar over the hello-engine stub so Clean voice works.
+engine_dst="${HOME}/Library/Application Support/PerfectVoice/engine/perfectvoice-engine"
+engine_dir="$(dirname "$engine_dst")"
+repo="$(cd "$root/../../.." && pwd)"
+# install-user.sh lives at host/com.perfectvoice.panel/ — three levels up is repo root.
+if [ ! -d "$repo/engine/perfectvoice_engine" ]; then
+  repo="$(cd "$root/../.." && pwd)"
+fi
+if [ -d "$repo/engine/perfectvoice_engine" ]; then
+  mkdir -p "$engine_dir"
+  if [ -f "$engine_dst" ] && file "$engine_dst" | grep -q "Mach-O"; then
+    size="$(wc -c < "$engine_dst" | tr -d ' ')"
+    # hello-engine is ~35 KB; a real onedir binary is much larger — leave those alone.
+    if [ "$size" -lt 200000 ]; then
+      mv "$engine_dst" "${engine_dir}/hello-engine.stub"
+    fi
+  fi
+  if [ ! -f "$engine_dst" ]; then
+    py="$(command -v python3 || true)"
+    [ -n "$py" ] || py="/usr/bin/python3"
+    {
+      echo "#!/bin/bash"
+      echo "set -euo pipefail"
+      printf 'PYTHON=%q\n' "$py"
+      printf 'REPO=%q\n' "$repo"
+      echo 'export PYTHONPATH="${REPO}/engine${PYTHONPATH:+:$PYTHONPATH}"'
+      echo "export PYTHONUNBUFFERED=1"
+      echo 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}"'
+      echo 'exec "$PYTHON" -u -m perfectvoice_engine.serve "$@"'
+    } > "$engine_dst"
+    chmod 755 "$engine_dst"
+    echo "installed DEV Python engine launcher:"
+    echo "  $engine_dst"
+  fi
+fi
+
 echo "installed user-space plugin:"
 echo "  $dst"
 echo "Restart DaVinci Resolve Studio, then Workspace → Workflow Integrations → PerfectVoice."

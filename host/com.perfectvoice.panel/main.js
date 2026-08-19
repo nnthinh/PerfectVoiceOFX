@@ -182,7 +182,18 @@ function registerIpc() {
     });
     ipcMain.handle("pv:downloadModel", async (_e, name) => {
         try {
-            return await downloadModel(name);
+            return await downloadModel(name, (data) => {
+                try {
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send("pv:downloadEvent", {
+                            type: "progress",
+                            data: data || {},
+                        });
+                    }
+                } catch {
+                    // ignore
+                }
+            });
         } catch (err) {
             return { ok: false, error: err && err.message ? err.message : String(err) };
         }

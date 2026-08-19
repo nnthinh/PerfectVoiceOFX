@@ -17,4 +17,11 @@ contextBridge.exposeInMainWorld("perfectvoice", {
         ipcRenderer.on("pv:jobEvent", listener);
         return () => ipcRenderer.removeListener("pv:jobEvent", listener);
     },
+    onDownloadEvent: (cb) => {
+        const listener = (_e, payload) => {
+            if (typeof cb === "function") cb(payload);
+        };
+        ipcRenderer.on("pv:downloadEvent", listener);
+        return () => ipcRenderer.removeListener("pv:downloadEvent", listener);
+    },
 });

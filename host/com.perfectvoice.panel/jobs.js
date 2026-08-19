@@ -13,12 +13,14 @@ const {
     streamJobEvents,
     isAlive,
     getPublicStatus,
+    startEngine,
+    downloadModel,
 } = require("./engine");
 const { inspectSelection } = require("./resolve/inspect");
 const { muteOriginalClips, placeIsolated } = require("./resolve/place");
 const { buildCreateJobRequest, placeParamsFromResult } = require("./resolve/job");
 
-const ENGINE_UNHEALTHY = "Engine is not connected. Start the engine first.";
+const ENGINE_UNHEALTHY = "Cannot start the engine. Check the PerfectVoice engine install.";
 const JOB_RUNNING = "A job is already running.";
 const NO_RESOLVE = "PerfectVoice requires DaVinci Resolve Studio and Workflow Integrations.";
 
@@ -107,16 +109,80 @@ function placeResults(resolve, inspect, origins, jobRecord) {
     return rows;
 }
 
+function weightStatus(name) {
+    const status = getPublicStatus() || {};
+    const health = status.health || {};
+    const ready = status.modelsReady || health.models_ready;
+    if (!ready || typeof ready !== "object") return "unknown";
+    if (ready[name] === true) return "ready";
+    return "missing";
+}
+
+async function ensureEngine(onEvent) {
+    if (engineHealthy()) return { ok: true };
+    emit(onEvent, { type: "progress", data: { message: "Starting engine…" } });
+    try {
+        await startEngine();
+    } catch (err) {
+        return {
+            ok: false,
+            error: (err && err.message) || ENGINE_UNHEALTHY,
+        };
+    }
+    if (!engineHealthy()) {
+        return { ok: false, error: ENGINE_UNHEALTHY, ...getPublicStatus() };
+    }
+    return { ok: true };
+}
+
+async function ensureWeights(name, onEvent) {
+    let status = weightStatus(name);
+    if (status === "unknown") {
+        try {
+            await startEngine();
+        } catch {
+            // refresh health / capabilities
+        }
+        status = weightStatus(name);
+    }
+    if (status === "ready") return { ok: true };
+    emit(onEvent, {
+        type: "progress",
+        data: { message: `Downloading ${name} (~84 MB Fast / ~330 MB Quality)…` },
+    });
+    const dl = await downloadModel(name, (data) => {
+        emit(onEvent, { type: "download", data: data || {} });
+    });
+    // Hello-engine / mock sidecars have no download endpoint.
+    if (dl.notImplemented && status === "unknown") return { ok: true };
+    if (!dl.ok) return dl;
+    try {
+        await startEngine();
+    } catch {
+        // health refresh is best-effort; download already returned ok
+    }
+    if (weightStatus(name) === "missing") {
+        return { ok: false, error: "Model download finished but weights are not ready." };
+    }
+    return { ok: true, downloaded: true };
+}
+
 async function removeAccompaniment(resolve, options, onEvent) {
     const opts = options || {};
     if (active) {
         return { ok: false, error: JOB_RUNNING };
     }
-    if (!engineHealthy()) {
-        return { ok: false, error: ENGINE_UNHEALTHY, ...getPublicStatus() };
-    }
     if (!resolve) {
         return { ok: false, error: NO_RESOLVE };
+    }
+
+    const started = await ensureEngine(onEvent);
+    if (!started.ok) return started;
+
+    const model = opts.model || "htdemucs";
+    const weights = await ensureWeights(model, onEvent);
+    if (!weights.ok) {
+        return { ...weights, ...getPublicStatus() };
     }
 
     const inspect = inspectSelection(resolve, { handleS: opts.handleS });

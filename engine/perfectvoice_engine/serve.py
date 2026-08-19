@@ -596,6 +596,7 @@ class EngineHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "status": "ok",
                     "protocol_version": PROTOCOL_VERSION,
+                    "models_ready": models_ready(self.server.local_repo),
                 },
             )
             return

@@ -444,6 +444,10 @@ class SidecarHttpTests(unittest.TestCase):
         assert isinstance(body, dict)
         self.assertTrue(body.get("ok"))
         self.assertEqual(body.get("protocol_version"), 1)
+        self.assertEqual(
+            body.get("models_ready"),
+            {"htdemucs": False, "htdemucs_ft": False},
+        )
         self.assertNotIn(eng.token, eng.stderr_text())
 
     def test_stdin_token(self) -> None:

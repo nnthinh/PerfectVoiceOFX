@@ -19,10 +19,15 @@ window.addEventListener("DOMContentLoaded", async () => {
     const clipList = document.getElementById("clipList");
     const inspectMeta = document.getElementById("inspectMeta");
     const inspectError = document.getElementById("inspectError");
+    const dlWrap = document.getElementById("dlWrap");
+    const dlLabel = document.getElementById("dlLabel");
+    const dlBar = document.getElementById("dlBar");
+    const dlLog = document.getElementById("dlLog");
 
     let lastStatus = null;
     let lastInspect = null;
     let jobRunning = false;
+    let downloading = false;
     let cancelTimer = null;
 
     function paint(s) {
@@ -50,32 +55,85 @@ window.addEventListener("DOMContentLoaded", async () => {
         return s.health.ok === true || s.health.status === "ok";
     }
 
+    function selectedModel() {
+        return (modelSelect && modelSelect.value) || "htdemucs";
+    }
+
+    function modelReadyMap(s) {
+        if (!s) return null;
+        if (s.modelsReady && typeof s.modelsReady === "object") return s.modelsReady;
+        if (s.health && s.health.models_ready && typeof s.health.models_ready === "object") {
+            return s.health.models_ready;
+        }
+        return null;
+    }
+
+    function isModelReady(s, name) {
+        const ready = modelReadyMap(s);
+        return !!(ready && ready[name] === true);
+    }
+
+    function formatBytes(n) {
+        const v = Number(n);
+        if (!Number.isFinite(v) || v < 0) return "—";
+        if (v < 1024) return `${Math.round(v)} B`;
+        if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
+        return `${(v / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function paintDownloadProgress(data) {
+        if (!dlWrap) return;
+        dlWrap.hidden = false;
+        const file = (data && data.filename) || selectedModel();
+        const done = Number(data && data.bytes_done);
+        const total = Number(data && data.bytes_total);
+        const pct = total > 0 && Number.isFinite(done) ? Math.min(100, Math.round((100 * done) / total)) : 0;
+        if (dlBar) dlBar.style.width = `${pct}%`;
+        if (dlLabel) {
+            dlLabel.textContent = total > 0
+                ? `Downloading ${file}… ${pct}%`
+                : `Downloading ${file}…`;
+        }
+        if (dlLog) {
+            dlLog.textContent = total > 0
+                ? `${file}\n${formatBytes(done)} / ${formatBytes(total)}`
+                : `${file}\n${formatBytes(done)}`;
+        }
+        jobProgress.textContent = total > 0
+            ? `Downloading ${file}: ${pct}% (${formatBytes(done)} / ${formatBytes(total)})`
+            : `Downloading ${file}…`;
+    }
+
+    function hideDownloadProgress() {
+        if (dlWrap) dlWrap.hidden = true;
+        if (dlBar) dlBar.style.width = "0";
+    }
+
     function syncRunButtons() {
-        const accepted = !!(lastInspect && lastInspect.ok && lastInspect.acceptedCount > 0);
-        const healthy = engineHealthy(lastStatus);
-        removeBtn.disabled = jobRunning || !healthy || !accepted;
+        const ready = isModelReady(lastStatus, selectedModel());
+        const busy = jobRunning || downloading;
+        removeBtn.disabled = busy || !ready;
         if (!jobRunning) {
             cancelBtn.disabled = true;
         }
-        startBtn.disabled = jobRunning;
-        inspectBtn.disabled = jobRunning;
-        placeBtn.disabled = jobRunning;
-        downloadBtn.disabled = jobRunning || !healthy;
-        if (jobRunning) return;
+        startBtn.disabled = busy;
+        inspectBtn.disabled = busy;
+        placeBtn.disabled = busy || !ready;
+        downloadBtn.disabled = busy || ready;
+        if (modelSelect) modelSelect.disabled = busy;
+        if (busy) return;
         const current = jobProgress.textContent || "";
         const isHint =
             !current ||
             current === "—" ||
-            /inspect a selection|start the engine|ready\. click remove/i.test(current);
+            /select a clip|starting engine|downloading |model ready/i.test(current);
         if (!isHint) return;
-        if (!healthy) {
-            jobProgress.textContent = accepted
-                ? "Start the engine to enable Remove musical accompaniment."
-                : "Inspect a selection and start the engine to enable Remove.";
-        } else if (!accepted) {
-            jobProgress.textContent = "Inspect a selection with at least one accepted clip.";
+        if (!engineHealthy(lastStatus)) {
+            jobProgress.textContent = "Starting engine…";
+        } else if (!ready) {
+            jobProgress.textContent = "Model not ready. Downloading…";
         } else {
-            jobProgress.textContent = "Ready. Click Remove musical accompaniment.";
+            jobProgress.textContent = "Select a clip with audio, then click Clean voice.";
         }
     }
 
@@ -156,10 +214,56 @@ window.addEventListener("DOMContentLoaded", async () => {
         }
     }
 
+    async function ensureModelDownloaded() {
+        if (downloading) return;
+        if (!engineHealthy(lastStatus)) return;
+        if (isModelReady(lastStatus, selectedModel())) {
+            hideDownloadProgress();
+            syncRunButtons();
+            return;
+        }
+        downloading = true;
+        jobError.textContent = "";
+        paintDownloadProgress({ filename: selectedModel(), bytes_done: 0, bytes_total: 0 });
+        syncRunButtons();
+        try {
+            const result = await window.perfectvoice.downloadModel(selectedModel());
+            paint(await window.perfectvoice.status());
+            if (result && result.ok) {
+                hideDownloadProgress();
+                jobProgress.textContent = isModelReady(lastStatus, selectedModel())
+                    ? "Model ready. Select a clip with audio, then click Clean voice."
+                    : "Download finished. Refreshing…";
+            } else if (result && result.notImplemented) {
+                hideDownloadProgress();
+                jobError.textContent = result.error || "Download is not available on this engine.";
+            } else {
+                jobError.textContent = (result && result.error) || "Model download failed.";
+            }
+        } catch (err) {
+            jobError.textContent = String(err && err.message ? err.message : err);
+        } finally {
+            downloading = false;
+            syncRunButtons();
+        }
+    }
+
     try {
         paint(await window.perfectvoice.status());
+        if (!engineHealthy(lastStatus)) {
+            statusEl.textContent = "Starting engine…";
+            paint(await window.perfectvoice.startEngine());
+        }
+        await ensureModelDownloaded();
     } catch (err) {
         errorEl.textContent = String(err && err.message ? err.message : err);
+        syncRunButtons();
+    }
+
+    if (modelSelect) {
+        modelSelect.addEventListener("change", () => {
+            ensureModelDownloaded();
+        });
     }
 
     startBtn.addEventListener("click", async () => {
@@ -214,22 +318,27 @@ window.addEventListener("DOMContentLoaded", async () => {
         }
     });
 
-    function selectedModel() {
-        return (modelSelect && modelSelect.value) || "htdemucs";
-    }
-
     function formatJobEvent(ev) {
         if (!ev) return "";
         const data = ev.data || {};
         if (ev.type === "queued") {
             return `Queued job ${data.id || ev.jobId || ""}`.trim();
         }
+        if (ev.type === "download") {
+            paintDownloadProgress(data);
+            return "";
+        }
         if (ev.type === "progress") {
+            if (data.bytes_done != null || data.filename) {
+                paintDownloadProgress(data);
+                return "";
+            }
+            if (data.message) return data.message;
             const len = Number(data.audio_length) || 0;
             const off = Number(data.segment_offset) || 0;
             const pct = len > 0 ? Math.min(100, Math.round((100 * off) / len)) : 0;
             const clip = data.clip_id ? `clip ${data.clip_id.slice(0, 8)}…` : "clip";
-            return `Calibrating… ${clip}  ${pct}%  (${off}/${len})`;
+            return `Working… ${clip}  ${pct}%  (${off}/${len})`;
         }
         if (ev.type === "done") return `Job done (${data.id || ev.jobId || ""})`.trim();
         if (ev.type === "error") return data.message || "Job error";
@@ -240,6 +349,11 @@ window.addEventListener("DOMContentLoaded", async () => {
         window.perfectvoice.onJobEvent((ev) => {
             const line = formatJobEvent(ev);
             if (line) jobProgress.textContent = line;
+        });
+    }
+    if (window.perfectvoice.onDownloadEvent) {
+        window.perfectvoice.onDownloadEvent((ev) => {
+            paintDownloadProgress((ev && ev.data) || ev || {});
         });
     }
 
@@ -271,13 +385,13 @@ window.addEventListener("DOMContentLoaded", async () => {
             });
             if (result && result.inspect) paintInspect(result.inspect);
             if (!result || !result.ok) {
-                jobError.textContent = (result && result.error) || "Remove musical accompaniment failed.";
+                jobError.textContent = (result && result.error) || "Clean voice failed.";
                 if (result && result.cancelled) {
-                    jobProgress.textContent = "Job cancelled. Timeline was not changed.";
+                    jobProgress.textContent = "Cancelled. Timeline was not changed.";
                 } else if (result && result.error && /Model not installed/i.test(result.error)) {
                     jobProgress.textContent = result.error;
                 } else {
-                    jobProgress.textContent = "Job did not finish.";
+                    jobProgress.textContent = "Did not finish.";
                 }
                 if (result && result.warnings && result.warnings.length) {
                     jobError.textContent += (jobError.textContent ? "\n" : "") + result.warnings.join("\n");
@@ -319,20 +433,6 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     downloadBtn.addEventListener("click", async () => {
         jobError.textContent = "";
-        downloadBtn.disabled = true;
-        try {
-            const result = await window.perfectvoice.downloadModel(selectedModel());
-            if (result && result.ok) {
-                jobProgress.textContent = "Model download started.";
-                return;
-            }
-            jobError.textContent =
-                (result && result.error) || "Download model is not implemented in this release.";
-        } catch (err) {
-            jobError.textContent = String(err && err.message ? err.message : err);
-        } finally {
-            downloadBtn.disabled = false;
-            syncRunButtons();
-        }
+        await ensureModelDownloaded();
     });
 });

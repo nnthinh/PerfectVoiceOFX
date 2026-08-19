@@ -274,7 +274,7 @@ function parseSseBuffer(buf) {
     return { events, rest };
 }
 
-function requestJson(method, pathname, body) {
+function requestJson(method, pathname, body, opts) {
     return new Promise((resolve, reject) => {
         if (!isAlive()) {
             reject(new Error("Engine is not connected."));
@@ -319,7 +319,8 @@ function requestJson(method, pathname, body) {
             },
         );
         req.on("error", reject);
-        req.setTimeout(30000, () => req.destroy(new Error("engine request timeout")));
+        const timeoutMs = opts && opts.timeoutMs != null ? opts.timeoutMs : 30000;
+        req.setTimeout(timeoutMs, () => req.destroy(new Error("engine request timeout")));
         if (payload != null) req.write(payload);
         req.end();
     });
@@ -447,7 +448,7 @@ async function cancelJob(jobId) {
     return res.body;
 }
 
-async function downloadModel(name) {
+async function downloadModel(name, onProgress) {
     const model = name || "htdemucs";
     if (!isAlive()) {
         return {
@@ -455,22 +456,120 @@ async function downloadModel(name) {
             error: "Engine is not connected.",
         };
     }
-    const res = await requestJson("POST", "/v1/models/download", { name: model });
-    if (res.status === 404 || res.status === 405 || res.status === 501) {
-        return {
-            ok: false,
-            notImplemented: true,
-            error: "Download model is not implemented in this release.",
-        };
-    }
-    if (res.status >= 200 && res.status < 300) {
-        return { ok: true, status: res.status, body: res.body };
-    }
-    return {
-        ok: false,
-        error: engineErrorMessage(res.body, `download status ${res.status}`),
-        status: res.status,
-    };
+    const base = String(session.readyUrl).replace(/\/$/, "");
+    const url = new URL("/v1/models/download", `${base}/`);
+    const payload = JSON.stringify({ name: model });
+    return new Promise((resolve) => {
+        const req = http.request(
+            {
+                hostname: url.hostname,
+                port: url.port,
+                path: url.pathname,
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${session.token}`,
+                    Accept: "text/event-stream",
+                    "Content-Type": "application/json",
+                    "Content-Length": Buffer.byteLength(payload),
+                },
+            },
+            (res) => {
+                const ctype = String(res.headers["content-type"] || "");
+                if (res.statusCode === 404 || res.statusCode === 405 || res.statusCode === 501) {
+                    let raw = "";
+                    res.setEncoding("utf8");
+                    res.on("data", (c) => {
+                        raw += c;
+                    });
+                    res.on("end", () => {
+                        let body = null;
+                        try {
+                            body = raw ? JSON.parse(raw) : null;
+                        } catch {
+                            body = null;
+                        }
+                        resolve({
+                            ok: false,
+                            notImplemented: true,
+                            error: "Download model is not implemented in this release.",
+                            status: res.statusCode,
+                            body,
+                        });
+                    });
+                    return;
+                }
+                if (!ctype.includes("text/event-stream")) {
+                    let raw = "";
+                    res.setEncoding("utf8");
+                    res.on("data", (c) => {
+                        raw += c;
+                    });
+                    res.on("end", () => {
+                        let body = null;
+                        try {
+                            body = raw ? JSON.parse(raw) : null;
+                        } catch {
+                            body = { error: "invalid_json" };
+                        }
+                        if (res.statusCode >= 200 && res.statusCode < 300) {
+                            resolve({ ok: true, status: res.statusCode, body });
+                            return;
+                        }
+                        resolve({
+                            ok: false,
+                            error: engineErrorMessage(body, `download status ${res.statusCode}`),
+                            status: res.statusCode,
+                            body,
+                        });
+                    });
+                    return;
+                }
+                let buf = "";
+                let lastBody = null;
+                res.setEncoding("utf8");
+                res.on("data", (chunk) => {
+                    buf += chunk;
+                    const parsed = parseSseBuffer(buf);
+                    buf = parsed.rest;
+                    for (const ev of parsed.events) {
+                        if (ev.event === "progress") {
+                            if (typeof onProgress === "function") onProgress(ev.data || {});
+                        } else if (ev.event === "done") {
+                            lastBody = ev.data;
+                        } else if (ev.event === "error") {
+                            const msg =
+                                ev.data && ev.data.message
+                                    ? ev.data.message
+                                    : "download failed";
+                            resolve({ ok: false, error: msg, status: res.statusCode });
+                            res.destroy();
+                            return;
+                        }
+                    }
+                });
+                res.on("end", () => {
+                    resolve({ ok: true, status: res.statusCode, body: lastBody });
+                });
+                res.on("error", (err) => {
+                    resolve({
+                        ok: false,
+                        error: err && err.message ? err.message : String(err),
+                    });
+                });
+            },
+        );
+        req.on("error", (err) => {
+            resolve({
+                ok: false,
+                error: err && err.message ? err.message : String(err),
+            });
+        });
+        req.setTimeout(15 * 60 * 1000, () => {
+            req.destroy(new Error("download timeout"));
+        });
+        req.write(payload);
+        req.end();
+    });
 }
 
 function waitReady(child, stderrRef) {
@@ -478,7 +577,7 @@ function waitReady(child, stderrRef) {
         let buf = "";
         const timer = setTimeout(() => {
             reject(new Error(`timeout waiting for READY\n${stderrRef.buf}`));
-        }, 8000);
+        }, 20000);
         const onExit = (code, signal) => {
             clearTimeout(timer);
             reject(new Error(`engine exited ${code} signal=${signal}\n${stderrRef.buf}`));
