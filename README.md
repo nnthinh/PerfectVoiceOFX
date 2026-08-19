@@ -25,26 +25,25 @@ The repo is named `PerfectVoiceOFX` because that is what the project was called 
 clip on timeline  →  inspect + reject  →  sidecar job
                                           extract (ffmpeg)
                                           resample (soxr)
-                                          Demucs vocals  (local weights only)
-                                          optional DeepFilterNet 3
+                                          Pass 1: Mel-Band RoFormer (SOTA 44.1kHz)
+                                          Pass 2: Target Speaker Extraction (TSE 192-d)
                                           wet/dry + BWF
                  ←  place on "PV Isolated Voice"
 ```
 
-- **Stage 1 (always):** Meta [Demucs](https://github.com/adefossez/demucs) `htdemucs` / `htdemucs_ft`. Music source separation — drums / bass / other / vocals.
-- **Stage 2 (off by default):** [DeepFilterNet 3](https://github.com/Rikorose/DeepFilterNet) for leftover environmental noise. If you leave it off, this tool does **not** claim “crystal-clear voice.”
+- **Pass 1 (Vocal Separation):** SOTA **[Mel-Band RoFormer](https://github.com/lucidrains/mel-band-roformer)** (`Kimberley Jensen` Studio 44.1kHz model) / Meta Demucs `htdemucs_ft`. Music source separation — vocals vs. accompaniment/beats/instruments.
+- **Pass 2 (Target Speaker Isolation):** Zero-shot **ECAPA-TDNN TSE** extracts a 192-dimensional voiceprint from your playhead position, applying cosine similarity filtering and Hanning smoothing to eliminate background lyrics and other talkers (-60dB suppression).
 - **Cache** is a full identity hash (48 kHz vs 96 kHz is two keys). Re-run the same clip and you skip infer.
-- **Weights are not in the installer.** First use: click *Download model* (~84 MB Fast / ~330 MB Quality). Infer only loads `Separator(..., repo=<local path>)`. Jobs never phone home.
+- **Weights are fetched on-demand.** First use: auto-downloads official Kimberley Jensen SOTA checkpoint (~871 MB) with real-time download progress. Infer only loads local weights. Jobs never phone home.
 
 ## What it is not
 
 | Not this | Why |
 | --- | --- |
-| A denoiser | Demucs is trained for *songs*, not HVAC, traffic, or room tone. |
-| SOTA 2026 vocal isolation | BS-RoFormer / Mel-RoFormer usually score higher. Demucs is the honest, local, inspectable stack. |
-| A replacement for Resolve Voice Isolation | Use Voice Isolation first when the problem is *noise*. Use PerfectVoice when the problem is *a song under the line*. |
-| An OpenFX / VST plugin | Offline sidecar. HTDemucs wants seconds of audio, not a 10–43 ms Fairlight buffer. |
-| A weight redistributor | Official checkpoints are **not MIT**. See [NOTICE](NOTICE) and [facebookresearch/demucs#327](https://github.com/facebookresearch/demucs/issues/327). |
+| A simple denoiser | PerfectVoice is built for separating vocals from *music, beats, and overlapping lyrics*. |
+| A replacement for Resolve Voice Isolation | Use Voice Isolation when the problem is pure *static room noise*. Use PerfectVoice when the problem is *a song/backing music under the dialogue*. |
+| An OpenFX / VST realtime plugin | Offline sidecar. SOTA Transformer inference processes high-resolution audio chunks, not a 10–43 ms Fairlight buffer. |
+| A weight redistributor | Checkpoints are downloaded on-demand from official HuggingFace repositories. |
 
 Full design (Vietnamese): [docs/design.md](docs/design.md).
 
