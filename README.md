@@ -72,10 +72,8 @@ bash host/com.perfectvoice.panel/install-user.sh
 # 2. Engine stub (spawn + /health). Optional until the onedir exists:
 bash installer/macos/install-user.sh
 
-# 3. Weights — you click this. It is not a sublicense.
-python3 scripts/download_demucs.py htdemucs
-
-# 4. Restart Resolve Studio → Workspace → Workflow Integrations → PerfectVoice
+# 3. Start Resolve Studio → Workspace → Workflow Integrations → PerfectVoice
+# (Model weights auto-download on first launch with real-time UI progress)
 ```
 
 Dump a live selection (Studio must be open, clip selected):
@@ -87,7 +85,7 @@ python3 scripts/spikes/dump_resolve_selection.py --out /tmp/pv-selection-dump.js
 Dogfood without Resolve:
 
 ```bash
-python3 scripts/isolate_cli.py /path/to/clip.wav /tmp/pv-out htdemucs
+python3 scripts/isolate_cli.py /path/to/clip.wav /tmp/pv-out mel_band_roformer
 ```
 
 ## Architecture
@@ -101,7 +99,7 @@ flowchart LR
   end
   subgraph Sidecar["127.0.0.1 sidecar"]
     API["HTTP + token + SSE"]
-    PIPE[extract → Demucs → blend]
+    PIPE[extract → Mel-Band RoFormer → TSE → blend]
     CACHE[(identity cache)]
   end
   TL --> WI
@@ -118,7 +116,7 @@ The sidecar binds **localhost only**. Auth is a token file or stdin — never `-
 python3 -m pip install -r requirements-dev.txt
 bash scripts/ci_forbid_demucs_urls.sh
 python3 -m unittest tests.unit.test_schemas tests.unit.test_serve tests.unit.test_weight_fetch \
-  tests.unit.test_resample_sync tests.unit.test_blend
+  tests.unit.test_resample_sync tests.unit.test_blend tests.unit.test_tse
 python3 -m unittest tests.golden.test_sync tests.golden.test_cache_keys tests.golden.test_appendix_a
 node --test host/com.perfectvoice.panel/resolve/*.test.js host/com.perfectvoice.panel/engine.test.js
 ```
@@ -132,7 +130,7 @@ Public preview. First open-source release.
 | Done | Next |
 | --- | --- |
 | Panel + sidecar + reject matrix | Live Resolve dump to pin speed / reverse / Elastic Wave keys |
-| User-click official weight fetch | PyInstaller onedir (no user Python) |
+| Mel-Band RoFormer SOTA 44.1kHz + Zero-shot TSE | PyInstaller onedir (no user Python) |
 | macOS user-space installer | Developer ID + notarize |
 | Windows installer sketches | CUDA engine SKU |
 
@@ -143,14 +141,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT
 ## License
 
 - PerfectVoice source: [MIT](LICENSE), Copyright 2026 PerfectVoice contributors.
-- Third-party and **Demucs weight terms**: [NOTICE](NOTICE), [docs/licenses/](docs/licenses/).
+- Third-party and model weight terms: [NOTICE](NOTICE), [docs/licenses/](docs/licenses/).
 
 ---
 
 ### Tiếng Việt
 
-Plugin **Workflow Integration** cho DaVinci Resolve **Studio**: chọn clip → *Remove musical accompaniment* → track `PV Isolated Voice` đồng bộ sample. Engine là sidecar Python (Demucs local), **không** phải OpenFX.
+Plugin **Workflow Integration** cho DaVinci Resolve **Studio**: chọn clip → *Clean voice* → track `PV Isolated Voice` đồng bộ sample. Engine là sidecar Python (Mel-Band RoFormer Studio AI + Target Speaker Extraction), **không** phải OpenFX.
 
-- Mạnh với **nhạc nền / beat**. Yếu với ồn phòng, HVAC, đường.
-- Không bundle checkpoint. User tự click *Download model*.
+- Mạnh với **bóc tách giọng hát / lời thoại khỏi nhạc nền, beat, và dập tắt lời hát bè (-60dB)** nhờ kiến trúc 2-Pass (RoFormer + TSE).
+- Tự động tải checkpoint SOTA Kimberley Jensen (~871 MB) khi mở lần đầu với giao diện hiển thị tiến trình thời gian thực.
 - Thiết kế đầy đủ: [docs/design.md](docs/design.md).

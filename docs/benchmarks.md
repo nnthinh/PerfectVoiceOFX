@@ -11,10 +11,10 @@ real measured row exists for that device. Until then UI ETA stays
 Use a fixed 60 s stereo fixture on the dogfood machine. Run:
 
 ```
-python3 scripts/isolate_cli.py /path/to/fixture_60s.wav /tmp/pv-bench htdemucs
+python3 scripts/isolate_cli.py /path/to/fixture_60s.wav /tmp/pv-bench mel_band_roformer
 ```
 
-Optional `--repo` points at the local Demucs directory. The CLI never
+Optional `--repo` points at the local models directory. The CLI never
 downloads weights; missing models exit 2 with `Model not installed`.
 
 Copy the printed `device`, `model`, `duration`, `wall_time`, and `rtf`

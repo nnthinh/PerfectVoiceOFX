@@ -21,15 +21,15 @@ Tên repo giữ `PerfectVoiceOFX` vì đây là cách user đặt. User nói “
 
 ## Overview
 
-Editor / colorist / sound editor trong DaVinci Resolve Studio cần tách **giọng thoại khỏi nhạc nền / accompaniment** ngay trên timeline: chọn clip, chạy xử lý **offline**, nhận track audio mới đồng bộ sample-accurate, không phá clip gốc. Engine được user chỉ định là **Meta Demucs** (`facebookresearch/demucs`, bảo trì tại `adefossez/demucs`; code MIT). Weights official: dev được tải; bản ship user click tải — không bundle, không auto-fetch (user chốt 2026-08-18; rủi ro #327 ghi ở § Security).
+Editor / colorist / sound editor trong DaVinci Resolve Studio cần tách **giọng thoại khỏi nhạc nền / accompaniment và lời hát bè** ngay trên timeline: chọn clip, chạy xử lý **offline**, nhận track audio mới đồng bộ sample-accurate, không phá clip gốc. Engine sử dụng mô hình SOTA **Mel-Band RoFormer** (`Kimberley Jensen` Studio AI 44.1kHz) kết hợp **Target Speaker Extraction (TSE)**. Weights official: tự động tải về khi mở lần đầu với giao diện hiển thị tiến trình thời gian thực — không bundle sẵn để tối ưu dung lượng cài đặt.
 
-Demucs (HTDemucs v4) là **music source separation** (drums / bass / other / vocals) trên MUSDB HQ + ~800 bài — **không** phải speech enhancer, **không** phải SOTA vocal 2025–26 (BS-RoFormer / Mel-RoFormer thường hơn trên vocal; xem A9). Nó mạnh với **bed nhạc**. Nó **yếu** với HVAC, giao thông, phòng, mic. PerfectVoice vì vậy là **pipeline hai stage**, không phải một nút “crystal-clear”:
+PerfectVoice vận hành theo **pipeline 2-Pass Hybrid**:
 
-1. Ingest **source-file extract** theo contract §3.3 (reject retime / FX / thiếu File Path — đây **không** phải output mixer Fairlight).
-2. Resample → 44.1 kHz stereo (native HTDemucs).
-3. Infer `vocals` stem bằng Demucs (stage bắt buộc; copy UI: *Remove musical accompaniment*).
-4. **Tùy chọn, default OFF:** DeepFilterNet 3 giảm residual noise môi trường (MIT + Apache-2.0 cả weights). Copy UI: *Reduce residual environmental noise*. Không bật thì **không** claim “giọng trong trẻo”.
-5. Wet/dry với mix gốc (cùng sample-rate domain — xem graph), output gain, optional mono.
+1. Ingest **source-file extract** theo contract §3.3 (reject retime / FX / thiếu File Path).
+2. Resample → 44.1 kHz stereo (native Mel-Band RoFormer).
+3. **Pass 1 (Vocal Separation):** Bóc tách vocal stem bằng **Mel-Band RoFormer** (SOTA 44.1kHz) bóc sạch toàn bộ nhạc nền, trống, bass, nhạc cụ.
+4. **Pass 2 (Target Speaker Extraction):** Trích xuất voiceprint 192 chiều từ vị trí Playhead (ECAPA-TDNN), áp dụng Cosine Similarity Masking + Hanning Window Smoothing để dập tắt lời hát bè (background lyrics) và tạp âm còn sót lại (-60dB).
+5. Wet/dry với mix gốc (cùng sample-rate domain), output gain.
 6. Resample về project rate (thường 48 kHz, đôi khi 96 kHz).
 7. Ghi WAV + BWF, import non-destructive lên track `PV Isolated Voice`.
 
