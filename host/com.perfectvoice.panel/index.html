@@ -5,42 +5,198 @@
     <title>PerfectVoice</title>
     <script type="text/javascript" src="./renderer.js"></script>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-            margin: 16px 20px;
+        * {
+            box-sizing: border-box;
+        }
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Never show outer window scrollbar */
+            background: #191919;
             color: #eee;
-            background: #1b1b1b;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            user-select: none;
         }
-        h1 { font-size: 19px; margin: 0 0 3px; }
-        .sub { color: #aaa; margin: 0 0 12px; font-size: 12px; }
-        .row { margin: 6px 0; font-size: 13px; }
-        .ok { color: #6c6; }
-        .off { color: #e88; }
-        button {
-            padding: 8px 14px;
-            cursor: pointer;
-            margin-top: 6px;
+
+        .app-shell {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            padding: 12px 16px 10px;
+            gap: 8px;
+            overflow: hidden;
         }
-        button.primary {
-            font-size: 14px;
+
+        /* 1. Header */
+        .app-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #282828;
+        }
+        .app-brand {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+        }
+        .app-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            margin: 0;
+            letter-spacing: -0.2px;
+        }
+        .app-tag {
+            font-size: 11px;
+            color: #777;
+        }
+        .app-status-box {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            font-family: ui-monospace, SFMono-Regular, monospace;
+        }
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-dot.ok { background: #52c41a; box-shadow: 0 0 6px rgba(82, 196, 26, 0.4); }
+        .status-dot.off { background: #ff4d4f; }
+        .status-text.ok { color: #52c41a; }
+        .status-text.off { color: #888; }
+
+        /* 2. Controls Section */
+        .controls-card {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+
+        .form-row {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .label-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11.5px;
             font-weight: 600;
-            padding: 10px 16px;
+            color: #bbb;
+        }
+        .val-badge {
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            font-size: 11px;
+            color: #3ee0c5;
+            font-weight: 600;
+        }
+        
+        select, input[type="range"] {
+            background: #111;
+            color: #eee;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 5px 8px;
+            font-size: 12px;
             width: 100%;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        select:focus {
+            border-color: #3ee0c5;
+        }
+        input[type="range"] {
+            padding: 0;
+            cursor: pointer;
+            accent-color: #3ee0c5;
+            height: 5px;
+            background: #252525;
+        }
+
+        /* 2-Column parameter grid for shifts and overlap */
+        .param-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        /* Checkboxes in a horizontal row */
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 1px 0;
+        }
+        .check-opt {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #bbb;
+            cursor: pointer;
+        }
+        .check-opt input {
+            cursor: pointer;
+            accent-color: #3ee0c5;
+            margin: 0;
+        }
+
+        /* 3. Action Buttons */
+        .actions-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 1px;
+        }
+        button.btn-primary {
+            flex: 1;
+            padding: 9px 14px;
+            background: #1d4d44;
+            color: #3ee0c5;
+            border: 1px solid #2dbfa6;
+            border-radius: 4px;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        button.btn-primary:hover:not(:disabled) {
+            background: #27695d;
+            color: #fff;
+        }
+        button.btn-cancel {
+            padding: 9px 14px;
+            background: #222;
+            color: #999;
+            border: 1px solid #333;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        button.btn-cancel:hover:not(:disabled) {
+            background: #2d2d2d;
+            color: #ddd;
         }
         button:disabled {
             cursor: not-allowed;
-            opacity: 0.55;
+            opacity: 0.45;
         }
-        #enginePath {
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 12px;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
+
+        /* 4. Inference Monitor (Flex-grow fills all remaining space) */
         .job-card {
-            margin: 14px 0 8px;
+            flex: 1;
+            min-height: 130px;
+            display: flex;
+            flex-direction: column;
             background: #111;
-            border: 1px solid #2d2d2d;
+            border: 1px solid #282828;
             border-radius: 4px;
             overflow: hidden;
         }
@@ -48,22 +204,21 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: #181818;
-            padding: 6px 10px;
-            border-bottom: 1px solid #282828;
-            font-size: 11px;
-            font-weight: 600;
-            color: #888;
+            background: #161616;
+            padding: 5px 10px;
+            border-bottom: 1px solid #222;
+            font-size: 10px;
+            font-weight: 700;
+            color: #777;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
         .job-badge {
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-family: ui-monospace, SFMono-Regular, monospace;
             font-size: 10px;
             padding: 2px 6px;
             border-radius: 3px;
             font-weight: 700;
-            letter-spacing: 0.5px;
         }
         .job-badge.idle { background: #222; color: #888; }
         .job-badge.running { background: #133830; color: #3ee0c5; }
@@ -72,332 +227,273 @@
         .job-badge.error { background: #381818; color: #ff4d4f; }
 
         .progress-section {
-            padding: 10px 12px 8px;
-            background: #141414;
-            border-bottom: 1px solid #242424;
+            padding: 7px 10px 5px;
+            background: #131313;
+            border-bottom: 1px solid #202020;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
         }
         .progress-block {
-            margin-bottom: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
         }
         .progress-info {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 11px;
-            margin-bottom: 4px;
+            font-size: 10.5px;
         }
-        .progress-label {
-            color: #aaa;
-            font-weight: 500;
-        }
+        .progress-label { color: #999; }
         .progress-stat {
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-family: ui-monospace, SFMono-Regular, monospace;
             font-weight: 600;
             color: #3ee0c5;
         }
         .bar-track {
-            height: 6px;
+            height: 5px;
             background: #202020;
             border-radius: 3px;
             overflow: hidden;
         }
-        .bar-track.sub-track {
-            height: 4px;
-            background: #1b1b1b;
-        }
+        .bar-track.sub-track { height: 3px; background: #191919; }
         .bar-fill {
             height: 100%;
             width: 0%;
             transition: width 0.15s ease-out;
         }
-        .bar-fill.main-bar {
-            background: linear-gradient(90deg, #2dbfa6, #3ee0c5);
-        }
-        .bar-fill.sub-bar {
-            background: #f5a623;
-        }
+        .bar-fill.main-bar { background: linear-gradient(90deg, #2dbfa6, #3ee0c5); }
+        .bar-fill.sub-bar { background: #f5a623; }
+
         .job-stats-row {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding-top: 6px;
-            margin-top: 4px;
-            border-top: 1px solid #202020;
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 11px;
+            padding-top: 4px;
+            border-top: 1px solid #1c1c1c;
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            font-size: 10.5px;
         }
-        .stat-item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .stat-k {
-            color: #777;
-        }
-        .stat-v {
-            color: #eee;
-            font-weight: 600;
-        }
+        .stat-item { display: flex; align-items: center; gap: 4px; }
+        .stat-k { color: #666; }
+        .stat-v { color: #eee; font-weight: 600; }
 
+        /* Terminal Activity Log */
         .job-log {
+            flex: 1; /* Takes all remaining vertical space inside monitor */
+            min-height: 40px;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 11px;
-            line-height: 1.5;
-            color: #ddd;
-            padding: 8px 10px;
-            min-height: 55px;
-            max-height: 130px;
+            font-size: 10.5px;
+            line-height: 1.45;
+            color: #ccc;
+            padding: 6px 10px;
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-all;
-            background: #0c0c0c;
+            background: #0a0a0a;
         }
-        #error, #resolveNote, #jobError { color: #e88; font-size: 12px; margin-top: 8px; }
-        hr { border: 0; border-top: 1px solid #333; margin: 20px 0 16px; }
-        .hint { color: #888; font-size: 12px; margin: 6px 0 0; }
-        button + button { margin-left: 8px; }
-        label.check { display: block; margin: 8px 0; font-size: 13px; }
-        label.check input { margin-right: 6px; }
-        select {
-            padding: 6px 8px;
-            margin-top: 4px;
-            background: #111;
-            color: #eee;
-            border: 1px solid #444;
-            border-radius: 4px;
-            width: 100%;
-            box-sizing: border-box;
-        }
-        .param-row {
-            margin: 14px 0;
-        }
-        .param-row label {
-            display: block;
-            font-size: 13px;
-            font-weight: 600;
-            color: #eee;
-            margin-bottom: 4px;
-        }
-        .param-control {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-top: 4px;
-        }
-        .param-control input[type="range"] {
-            flex: 1;
-            accent-color: #3ee0c5;
-            cursor: pointer;
-        }
-        .param-val {
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 12px;
-            min-width: 95px;
-            color: #3ee0c5;
-            font-weight: 600;
-        }
-        .param-desc {
-            color: #888;
-            font-size: 11px;
-            line-height: 1.4;
-            margin: 4px 0 0;
-        }
-        .param-desc strong {
-            color: #bbb;
-        }
-        .param-desc em {
-            color: #aaa;
-            font-style: normal;
-        }
+
+        /* 5. Hardware Telemetry Bar (Pinned at bottom) */
         .telemetry-box {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            background: #141414;
-            border: 1px solid #333;
+            background: #121212;
+            border: 1px solid #242424;
             border-radius: 4px;
-            padding: 8px 12px;
-            margin: 8px 0;
+            padding: 5px 10px;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10.5px;
+        }
+        .telemetry-box[hidden] { display: none; }
+        .telemetry-item { display: flex; align-items: center; gap: 4px; }
+        .telemetry-label { color: #777; }
+        .telemetry-val { color: #3ee0c5; font-weight: 600; }
+
+        #error, #resolveNote, #jobError {
+            color: #ff6b6b;
             font-size: 11px;
+            margin: 0;
         }
-        .telemetry-box[hidden] {
-            display: none;
-        }
-        .telemetry-item {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-        .telemetry-label {
-            color: #888;
-        }
-        .telemetry-val {
-            color: #3ee0c5;
-            font-weight: 600;
-        }
+        #jobError:empty { display: none; }
+
+        /* Model Download Progress */
         #dlWrap {
-            margin: 12px 0 0;
             background: #111;
             border: 1px solid #333;
-            padding: 10px;
+            border-radius: 4px;
+            padding: 8px 10px;
         }
         #dlWrap[hidden] { display: none; }
-        #dlLabel { font-size: 13px; margin: 0 0 8px; }
+        #dlLabel { font-size: 11px; margin-bottom: 4px; color: #ccc; }
         .bar {
-            height: 10px;
+            height: 6px;
             background: #2a2a2a;
-            border-radius: 5px;
+            border-radius: 3px;
             overflow: hidden;
         }
-        #dlBar {
-            height: 100%;
-            width: 0;
-            background: #3ee0c5;
-            transition: width 0.15s linear;
-        }
-        #dlLog {
-            margin: 8px 0 0;
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 12px;
-            color: #bbb;
-            white-space: pre-wrap;
-        }
+        #dlBar { height: 100%; width: 0; background: #3ee0c5; }
+        #dlLog { font-size: 10px; color: #888; font-family: ui-monospace, monospace; margin-top: 3px; }
     </style>
 </head>
 <body>
-    <h1>PerfectVoice</h1>
-    <p class="sub">Select clip(s) with audio on the timeline, then clean the voice.</p>
+    <div class="app-shell">
+        <!-- 1. Header -->
+        <header class="app-header">
+            <div class="app-brand">
+                <span class="app-title">PerfectVoice</span>
+                <span class="app-tag">DaVinci Resolve Vocal Isolation</span>
+            </div>
+            <div class="app-status-box">
+                <span id="statusDot" class="status-dot off"></span>
+                <span id="status" class="status-text off">Starting engine…</span>
+            </div>
+        </header>
 
-    <div class="row">Status: <span id="status" class="off">Starting engine…</span></div>
-    <div class="row">Engine: <span id="enginePath">…</span></div>
-    <p id="error"></p>
-    <p id="resolveNote"></p>
+        <span id="enginePath" hidden></span>
+        <div id="error"></div>
+        <div id="resolveNote"></div>
 
-    <div class="param-row">
-        <label for="modelSelect">Preset</label>
-        <select id="modelSelect">
-            <option value="htdemucs" selected>Fast (htdemucs)</option>
-            <option value="htdemucs_ft">Quality (htdemucs_ft)</option>
-        </select>
-    </div>
-
-    <div class="param-row">
-        <label for="wetInput">Voice isolation mix (Wet)</label>
-        <div class="param-control">
-            <input id="wetInput" type="range" min="0" max="1" step="0.05" value="0.85">
-            <span id="wetVal" class="param-val">0.85 (85%)</span>
-        </div>
-        <p class="param-desc">Ratio of isolated voice vs original audio. <strong>1.00 (100%)</strong> = pure isolated voice (maximum noise & music removal). <strong>0.85 (85%)</strong> = blends 15% original audio for a more natural room tone. <em>Default: 0.85</em></p>
-    </div>
-
-    <div class="param-row">
-        <label for="shiftsSelect">Demucs shifts</label>
-        <select id="shiftsSelect">
-            <option value="1" selected>1 (Fast — Default)</option>
-            <option value="2">2 (Better quality — 2× slower)</option>
-            <option value="4">4 (Best quality — 4× slower, least music bleed)</option>
-        </select>
-        <p class="param-desc">Random time-shift averaging (test-time augmentation). Higher values reduce music bleed and artifacts in complex audio, but increase processing time proportionally. <em>Default: 1</em></p>
-    </div>
-
-    <div class="param-row">
-        <label for="overlapSelect">Segment overlap</label>
-        <select id="overlapSelect">
-            <option value="0.25" selected>0.25 (25% — Default)</option>
-            <option value="0.5">0.50 (50% — Smoother chunk transitions)</option>
-            <option value="0.75">0.75 (75% — Maximum overlap)</option>
-        </select>
-        <p class="param-desc">Overlap between 7.8s Demucs processing chunks. Higher overlap cross-fades segment boundaries more smoothly and prevents dropouts in complex sections. <em>Default: 0.25</em></p>
-    </div>
-
-    <label class="check">
-        <input id="muteCheck" type="checkbox">
-        Mute original clips
-    </label>
-    <label class="check">
-        <input id="cacheCheck" type="checkbox" checked>
-        Use cache
-    </label>
-    <p>
-        <button id="removeBtn" class="primary" type="button" disabled>Clean voice</button>
-    </p>
-    <p>
-        <button id="cancelBtn" type="button" disabled>Cancel</button>
-    </p>
-    <div id="dlWrap" hidden>
-        <div id="dlLabel">Downloading model…</div>
-        <div class="bar"><div id="dlBar"></div></div>
-        <div id="dlLog"></div>
-    </div>
-    <div class="job-card">
-        <div class="job-header">
-            <span class="job-title">Inference Monitor</span>
-            <span id="jobBadge" class="job-badge idle">IDLE</span>
-        </div>
-        
-        <!-- Dual Progress Section -->
-        <div class="progress-section">
-            <!-- 1. Total Job Progress -->
-            <div class="progress-block">
-                <div class="progress-info">
-                    <span class="progress-label">Total Progress</span>
-                    <span id="overallPctText" class="progress-stat">0% (0/0)</span>
+        <!-- 2. Controls Section -->
+        <div class="controls-card">
+            <div class="form-row">
+                <div class="label-row">
+                    <label for="modelSelect">Preset</label>
                 </div>
-                <div class="bar-track"><div id="overallBar" class="bar-fill main-bar"></div></div>
+                <select id="modelSelect">
+                    <option value="htdemucs" selected>Fast (htdemucs)</option>
+                    <option value="htdemucs_ft">Quality (htdemucs_ft)</option>
+                </select>
             </div>
 
-            <!-- 2. Current Pass Progress -->
-            <div class="progress-block">
-                <div class="progress-info">
-                    <span id="currentPassTitle" class="progress-label">Current Pass</span>
-                    <span id="currentPassPctText" class="progress-stat">—</span>
+            <div class="form-row">
+                <div class="label-row">
+                    <label for="wetInput">Voice isolation mix (Wet)</label>
+                    <span id="wetVal" class="val-badge">0.85 (85%)</span>
                 </div>
-                <div class="bar-track sub-track"><div id="currentBar" class="bar-fill sub-bar"></div></div>
+                <input id="wetInput" type="range" min="0" max="1" step="0.05" value="0.85">
             </div>
 
-            <!-- ETA & Performance Stats -->
-            <div class="job-stats-row">
-                <div class="stat-item">
-                    <span class="stat-k">Elapsed:</span>
-                    <span id="statElapsed" class="stat-v">00:00</span>
+            <div class="param-grid">
+                <div class="form-row">
+                    <div class="label-row">
+                        <label for="shiftsSelect">Demucs shifts</label>
+                    </div>
+                    <select id="shiftsSelect">
+                        <option value="1" selected>1 (Fast)</option>
+                        <option value="2">2 (Better)</option>
+                        <option value="4">4 (Best quality)</option>
+                    </select>
                 </div>
-                <div class="stat-item">
-                    <span class="stat-k">Remaining:</span>
-                    <span id="statEta" class="stat-v">—</span>
+
+                <div class="form-row">
+                    <div class="label-row">
+                        <label for="overlapSelect">Segment overlap</label>
+                    </div>
+                    <select id="overlapSelect">
+                        <option value="0.25" selected>0.25 (25%)</option>
+                        <option value="0.5">0.50 (50%)</option>
+                        <option value="0.75">0.75 (75%)</option>
+                    </select>
                 </div>
-                <div class="stat-item">
-                    <span class="stat-k">Speed:</span>
-                    <span id="statSpeed" class="stat-v">—</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-k">Passes:</span>
-                    <span id="statPasses" class="stat-v">—</span>
-                </div>
+            </div>
+
+            <div class="checkbox-row">
+                <label class="check-opt">
+                    <input id="muteCheck" type="checkbox">
+                    <span>Mute original clips</span>
+                </label>
+                <label class="check-opt">
+                    <input id="cacheCheck" type="checkbox" checked>
+                    <span>Use cache</span>
+                </label>
+            </div>
+
+            <div class="actions-row">
+                <button id="removeBtn" class="btn-primary" type="button" disabled>Clean voice</button>
+                <button id="cancelBtn" class="btn-cancel" type="button" disabled>Cancel</button>
             </div>
         </div>
 
-        <!-- Terminal Console Log -->
-        <div id="jobLog" class="job-log">Ready. Select a clip with audio, then click Clean voice.</div>
+        <div id="dlWrap" hidden>
+            <div id="dlLabel">Downloading model…</div>
+            <div class="bar"><div id="dlBar"></div></div>
+            <div id="dlLog"></div>
+        </div>
+
+        <!-- 3. Inference Monitor (Flex fills remaining viewport height) -->
+        <div class="job-card">
+            <div class="job-header">
+                <span class="job-title">Inference Monitor</span>
+                <span id="jobBadge" class="job-badge idle">IDLE</span>
+            </div>
+            
+            <div class="progress-section">
+                <!-- Overall Progress -->
+                <div class="progress-block">
+                    <div class="progress-info">
+                        <span class="progress-label">Total Progress</span>
+                        <span id="overallPctText" class="progress-stat">0%</span>
+                    </div>
+                    <div class="bar-track"><div id="overallBar" class="bar-fill main-bar"></div></div>
+                </div>
+
+                <!-- Current Pass Progress -->
+                <div class="progress-block">
+                    <div class="progress-info">
+                        <span id="currentPassTitle" class="progress-label">Current Pass</span>
+                        <span id="currentPassPctText" class="progress-stat">—</span>
+                    </div>
+                    <div class="bar-track sub-track"><div id="currentBar" class="bar-fill sub-bar"></div></div>
+                </div>
+
+                <!-- ETA & Stats -->
+                <div class="job-stats-row">
+                    <div class="stat-item">
+                        <span class="stat-k">Elapsed:</span>
+                        <span id="statElapsed" class="stat-v">00:00</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-k">ETA:</span>
+                        <span id="statEta" class="stat-v">—</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-k">Speed:</span>
+                        <span id="statSpeed" class="stat-v">—</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-k">Passes:</span>
+                        <span id="statPasses" class="stat-v">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Terminal Activity Log (Scrolls internally) -->
+            <div id="jobLog" class="job-log">Ready. Select a clip on the timeline, then click Clean voice.</div>
+        </div>
+
+        <!-- 4. Hardware Telemetry Bar (Pinned at bottom) -->
+        <div id="telemetryWrap" class="telemetry-box" hidden>
+            <div class="telemetry-item">
+                <span class="telemetry-label">Compute:</span>
+                <span id="telCompute" class="telemetry-val">—</span>
+            </div>
+            <div class="telemetry-item">
+                <span class="telemetry-label">RAM:</span>
+                <span id="telRam" class="telemetry-val">—</span>
+            </div>
+            <div class="telemetry-item">
+                <span class="telemetry-label">CPU:</span>
+                <span id="telCpu" class="telemetry-val">—</span>
+            </div>
+            <div class="telemetry-item">
+                <span class="telemetry-label">Time:</span>
+                <span id="telTime" class="telemetry-val">—</span>
+            </div>
+        </div>
+
+        <div id="jobError"></div>
     </div>
-    <div id="telemetryWrap" class="telemetry-box" hidden>
-        <div class="telemetry-item">
-            <span class="telemetry-label">Compute:</span>
-            <span id="telCompute" class="telemetry-val">—</span>
-        </div>
-        <div class="telemetry-item">
-            <span class="telemetry-label">RAM:</span>
-            <span id="telRam" class="telemetry-val">—</span>
-        </div>
-        <div class="telemetry-item">
-            <span class="telemetry-label">CPU:</span>
-            <span id="telCpu" class="telemetry-val">—</span>
-        </div>
-        <div class="telemetry-item">
-            <span class="telemetry-label">Time:</span>
-            <span id="telTime" class="telemetry-val">—</span>
-        </div>
-    </div>
-    <p id="jobError"></p>
 </body>
 </html>

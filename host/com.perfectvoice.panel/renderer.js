@@ -183,15 +183,23 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     function paint(s) {
         const connected = !!(s && s.connected);
-        statusEl.textContent = connected ? "Engine connected" : "Engine not connected";
-        statusEl.className = connected ? "ok" : "off";
-        pathEl.textContent = (s && s.enginePath) || "not found";
-        if (s && s.resolveReady) {
-            resolveEl.textContent = "";
-        } else if (s && s.resolveError) {
-            resolveEl.textContent = s.resolveError;
+        const statusDot = document.getElementById("statusDot");
+        if (statusEl) {
+            statusEl.textContent = connected ? "Engine connected" : "Engine not connected";
+            statusEl.className = connected ? "status-text ok" : "status-text off";
         }
-        errorEl.textContent = (s && s.error) || "";
+        if (statusDot) {
+            statusDot.className = connected ? "status-dot ok" : "status-dot off";
+        }
+        if (pathEl) pathEl.textContent = (s && s.enginePath) || "not found";
+        if (resolveEl) {
+            if (s && s.resolveReady) {
+                resolveEl.textContent = "";
+            } else if (s && s.resolveError) {
+                resolveEl.textContent = s.resolveError;
+            }
+        }
+        if (errorEl) errorEl.textContent = (s && s.error) || "";
         lastStatus = s;
         syncRunButtons();
     }

@@ -349,6 +349,20 @@ function createWindow() {
     }
     mainWindow = new BrowserWindow(options);
 
+    mainWindow.once("ready-to-show", () => {
+        try {
+            if (ws.width && ws.height) {
+                mainWindow.setContentSize(ws.width, ws.height);
+            }
+            if (ws.x != null && ws.y != null) {
+                mainWindow.setPosition(ws.x, ws.y);
+            }
+        } catch {
+            // ignore
+        }
+        mainWindow.show();
+    });
+
     let saveTimer = null;
     const debouncedSave = () => {
         if (saveTimer) clearTimeout(saveTimer);
