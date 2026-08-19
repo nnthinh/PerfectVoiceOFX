@@ -685,14 +685,21 @@ class EngineHandler(BaseHTTPRequestHandler):
         try:
             from perfectvoice_engine.ffmpeg_io import decode_f32
             from perfectvoice_engine.tse import SpeakerStore, extract_embedding
-            frames, _probe = decode_f32(Path(audio_path))
-            sr = 44100
-            if t1 > t0:
-                s0 = int(t0 * sr)
-                s1 = min(int(t1 * sr), frames.shape[-1])
-                frames = frames[:, s0:s1]
+            frames, probe = decode_f32(Path(audio_path))
+            sr = probe.sample_rate or 44100
+            # decode_f32 returns [num_samples, channels], transpose to [channels, num_samples]
+            if frames.ndim == 2:
+                frames = frames.T
+            elif frames.ndim == 1:
+                frames = frames[np.newaxis, :]
 
-            dur_s = float(frames.shape[-1]) / sr
+            if t1 > t0:
+                s0 = max(0, int(t0 * sr))
+                s1 = min(int(t1 * sr), frames.shape[-1])
+                if s1 > s0:
+                    frames = frames[:, s0:s1]
+
+            dur_s = round(float(frames.shape[-1]) / sr, 2)
             embedding = extract_embedding(frames, sample_rate=sr)
             store = SpeakerStore()
             profile = store.enroll(name=name, embedding=embedding, sample_duration_s=dur_s)

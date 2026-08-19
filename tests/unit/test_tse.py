@@ -103,5 +103,74 @@ class TSEExtractorTests(unittest.TestCase):
         self.assertFalse(np.isinf(out).any())
 
 
+class SidecarSpeakerHttpTests(unittest.TestCase):
+    def test_enroll_endpoint(self) -> None:
+        from perfectvoice_engine.ffmpeg_io import write_wav
+        from perfectvoice_engine.serve import EngineHTTPServer, JobStore
+        import http.client
+        import json
+
+        tmp = Path(tempfile.mkdtemp(prefix="pv-tse-http-"))
+        try:
+            # 1. Create a dummy test WAV
+            sr = 48000
+            dur_s = 3.0
+            t = np.linspace(0, dur_s, int(sr * dur_s), dtype=np.float32)
+            audio = 0.5 * np.sin(2 * np.pi * 200 * t)[:, np.newaxis]
+            wav_path = tmp / "sample.wav"
+            write_wav(wav_path, audio, sample_rate=sr)
+
+            # 2. Start in-process sidecar server
+            token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            server = EngineHTTPServer(("127.0.0.1", 0), token, JobStore(), idle_seconds=0)
+            port = server.server_address[1]
+            import threading
+            th = threading.Thread(target=server.serve_forever, daemon=True)
+            th.start()
+
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                }
+
+                # 3. Test POST /v1/speakers/enroll
+                body = json.dumps({
+                    "audio_path": str(wav_path),
+                    "name": "HostVoice",
+                    "t0": 0.0,
+                    "t1": 3.0,
+                })
+                conn.request("POST", "/v1/speakers/enroll", body=body, headers=headers)
+                res = conn.getresponse()
+                self.assertEqual(res.status, 200)
+                data = json.loads(res.read().decode("utf-8"))
+                self.assertTrue(data.get("ok"))
+                spk = data.get("speaker", {})
+                self.assertEqual(spk.get("name"), "HostVoice")
+                spk_id = spk.get("speaker_id")
+                self.assertTrue(spk_id.startswith("spk_"))
+
+                # 4. Test GET /v1/speakers
+                conn.request("GET", "/v1/speakers", headers=headers)
+                res = conn.getresponse()
+                self.assertEqual(res.status, 200)
+                list_data = json.loads(res.read().decode("utf-8"))
+                self.assertTrue(list_data.get("ok"))
+                self.assertTrue(any(s["speaker_id"] == spk_id for s in list_data.get("speakers", [])))
+
+                # 5. Test DELETE /v1/speakers/:id
+                conn.request("DELETE", f"/v1/speakers/{spk_id}", headers=headers)
+                res = conn.getresponse()
+                self.assertEqual(res.status, 200)
+
+            finally:
+                server.shutdown()
+                server.server_close()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

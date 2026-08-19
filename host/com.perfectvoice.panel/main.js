@@ -311,15 +311,20 @@ function registerIpc() {
                 const resolve = await ensureResolveInit();
                 if (!resolve) return { ok: false, error: resolveError || STUDIO_REQUIRED };
                 const insp = inspectSelection(resolve);
-                if (!insp || !insp.clips || !insp.clips.length) {
+                const clips = ((insp && insp.clips) || []).filter(
+                    (c) => c && (c.filePath || c.source_path || c.path) && !c.rejected && !c.suppressedDuplicate
+                );
+                if (!clips.length) {
                     return { ok: false, error: "Select a clip on the timeline first to enroll voice." };
                 }
-                const first = insp.clips[0];
-                audioPath = first.source_path || first.path;
-                const sr = first.source_sample_rate || 44100;
-                t0 = first.source_in_sample != null ? first.source_in_sample / sr : 0;
-                t1 = first.source_out_sample != null ? first.source_out_sample / sr : t0 + 3.0;
-                name = first.clip_name || first.name || name;
+                const first = clips[0];
+                audioPath = first.filePath || first.file_path || first.source_path || first.path;
+                const sr = first.sampleRate || first.source_sample_rate || 44100;
+                t0 = first.t0 != null ? Number(first.t0) : (first.sourceInSample != null ? first.sourceInSample / sr : 0);
+                t1 = first.t1 != null ? Number(first.t1) : (first.sourceOutSample != null ? first.sourceOutSample / sr : t0 + 3.0);
+                if (t1 <= t0) t1 = t0 + 3.0;
+                if (t1 - t0 > 5.0) t1 = t0 + 5.0;
+                name = first.name || first.clip_name || (audioPath ? path.basename(audioPath, path.extname(audioPath)) : "Speaker");
             }
             return await enrollSpeaker({ audio_path: audioPath, name, t0, t1 });
         } catch (err) {
