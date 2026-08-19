@@ -54,12 +54,17 @@ class CacheKeyPairTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_48_vs_96_two_keys(self) -> None:
+        out48 = self.tmp / "out48"
+        out96 = self.tmp / "out96"
+        out48.mkdir(exist_ok=True)
+        out96.mkdir(exist_ok=True)
+        roots = [str(self.media), str(out48), str(out96)]
         with identity_pipeline(self.tmp):
             r48 = run_clip(
-                job_body(self.src, self.out, self.roots, project_sample_rate=48000)
+                job_body(self.src, out48, roots, project_sample_rate=48000)
             )
             r96 = run_clip(
-                job_body(self.src, self.out, self.roots, project_sample_rate=96000)
+                job_body(self.src, out96, roots, project_sample_rate=96000)
             )
         self.assertNotEqual(r48["input_hash"], r96["input_hash"])
         self.assertFalse(r48["cache_hit"])
@@ -72,7 +77,7 @@ class CacheKeyPairTests(unittest.TestCase):
         self.assertLessEqual(abs(int(r48["output_samples"]) - n48), 1)
         self.assertLessEqual(abs(int(r96["output_samples"]) - n96), 1)
         self.assertEqual(IdentitySeparator.separate_calls, 2)
-        body48 = job_body(self.src, self.out, self.roots, project_sample_rate=48000)
+        body48 = job_body(self.src, out48, roots, project_sample_rate=48000)
         manifest = json.loads((self.tmp / "manifest.json").read_text(encoding="utf-8"))
         digest = weights_sha256(manifest[DEFAULT_MODEL])
         self.assertEqual(
@@ -86,9 +91,14 @@ class CacheKeyPairTests(unittest.TestCase):
         )
 
     def test_pcm24_vs_f32_two_keys(self) -> None:
+        out_pcm = self.tmp / "out_pcm"
+        out_f32 = self.tmp / "out_f32"
+        out_pcm.mkdir(exist_ok=True)
+        out_f32.mkdir(exist_ok=True)
+        roots = [str(self.media), str(out_pcm), str(out_f32)]
         with identity_pipeline(self.tmp):
-            pcm = run_clip(job_body(self.src, self.out, self.roots, sample_format="pcm24"))
-            f32 = run_clip(job_body(self.src, self.out, self.roots, sample_format="float32"))
+            pcm = run_clip(job_body(self.src, out_pcm, roots, sample_format="pcm24"))
+            f32 = run_clip(job_body(self.src, out_f32, roots, sample_format="float32"))
         self.assertNotEqual(pcm["input_hash"], f32["input_hash"])
         self.assertFalse(pcm["cache_hit"])
         self.assertFalse(f32["cache_hit"])
