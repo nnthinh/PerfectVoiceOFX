@@ -115,7 +115,13 @@ def _offline_hub_env() -> Iterator[None]:
 
 
 def _separator_cls() -> Any:
-    return importlib.import_module("demucs.api").Separator
+    try:
+        return importlib.import_module("demucs.api").Separator
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Python package 'demucs' is not installed in the engine interpreter. "
+            "Install with: python3 -m pip install 'demucs>=4.0.1'"
+        ) from exc
 
 
 def _to_model_input(arr: np.ndarray) -> Any:

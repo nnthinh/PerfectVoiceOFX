@@ -184,6 +184,77 @@ function parseTimelineFrameRate(raw) {
     return asFps(value);
 }
 
+function parseMediaStartSeconds(raw) {
+    if (raw == null) return null;
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+    const text = String(raw).trim();
+    if (!text) return null;
+    if (!text.includes(":")) {
+        const n = Number(text);
+        return Number.isFinite(n) ? n : null;
+    }
+    const m = text.match(/^(\d+):(\d{2}):(\d{2})(?:[:;.](\d+))?/);
+    if (!m) return null;
+    return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+}
+
+function startTcFromDump(dump) {
+    if (!dump || typeof dump !== "object") return null;
+    for (const [key, val] of Object.entries(dump)) {
+        if (!/start\s*(tc|timecode)/i.test(key)) continue;
+        const n = parseMediaStartSeconds(val);
+        if (n != null) return n;
+    }
+    return null;
+}
+
+/**
+ * GetSourceStartTime() is often reel / time-of-day TC (21:05:40),
+ * not seconds from byte 0 of the file. Map onto [0, fileDur].
+ */
+function fileRelativeTimes(t0, t1, fileDur, opts) {
+    const options = opts || {};
+    if (!(fileDur > 0) || !(t1 > t0) || !Number.isFinite(t0) || !Number.isFinite(t1)) {
+        return { t0, t1, shifted: false, origin: 0 };
+    }
+    const eps = 1e-3;
+    if (t0 >= -eps && t1 <= fileDur + 1) {
+        return {
+            t0: Math.max(0, t0),
+            t1: Math.min(t1, fileDur),
+            shifted: false,
+            origin: 0,
+        };
+    }
+    const startTc = options.startTc;
+    if (startTc != null && Number.isFinite(startTc)) {
+        const a = t0 - startTc;
+        const b = t1 - startTc;
+        if (b > a && a < fileDur && b > 0) {
+            return {
+                t0: Math.max(0, a),
+                t1: Math.min(b, fileDur),
+                shifted: true,
+                origin: startTc,
+            };
+        }
+    }
+    const leftS = options.leftOffsetSeconds;
+    if (leftS != null && Number.isFinite(leftS) && leftS >= 0 && leftS < fileDur) {
+        const span = t1 - t0;
+        const a = leftS;
+        const b = Math.min(leftS + span, fileDur);
+        if (b > a) {
+            return { t0: a, t1: b, shifted: true, origin: t0 - a };
+        }
+    }
+    if (t0 >= fileDur - eps) {
+        const span = t1 - t0;
+        return { t0: 0, t1: Math.min(span, fileDur), shifted: true, origin: t0 };
+    }
+    return { t0, t1, shifted: false, origin: 0 };
+}
+
 function actualHandles(t0, t1, fileDur, handleS = DEFAULT_HANDLE_S) {
     // Fixture: t0=0.2, H=0.5 → H_left_actual=0.2 (not 0.5).
     if (handleS < 0) {
@@ -282,6 +353,9 @@ module.exports = {
     asFps,
     parseTimelineFrameRate,
     actualHandles,
+    fileRelativeTimes,
+    parseMediaStartSeconds,
+    startTcFromDump,
     extractSampleRange,
     placeFrames,
     expectedOutputSampleCount,

@@ -143,6 +143,17 @@ class PlaceFrames:
         return self.handle_end_frame_exclusive - self.handle_start_frame
 
 
+def file_relative_times(t0: float, t1: float, file_dur: float) -> tuple[float, float]:
+    """Map reel / time-of-day source TC onto [0, file_dur]."""
+    if file_dur <= 0 or t1 <= t0:
+        return t0, t1
+    if t0 >= -1e-3 and t1 <= file_dur + 1.0:
+        return max(0.0, t0), min(t1, file_dur)
+    if t0 >= file_dur - 1e-3:
+        return 0.0, min(t1 - t0, file_dur)
+    return t0, t1
+
+
 def extract_sample_range(
     t0: float,
     t1: float,

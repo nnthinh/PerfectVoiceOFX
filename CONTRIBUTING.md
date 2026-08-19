@@ -23,6 +23,12 @@ node --test host/com.perfectvoice.panel/resolve/*.test.js host/com.perfectvoice.
 
 Need ffmpeg on `PATH` for extract/resample tests.
 
+Infer (Clean voice) on the DEV sidecar also needs:
+
+```bash
+python3 -m pip install -r requirements-infer.txt
+```
+
 ## What to open a PR for
 
 Good: tests, reject-matrix facts from a live Resolve dump, installer hardening, Windows CUDA, PyInstaller onedir, copy fixes.

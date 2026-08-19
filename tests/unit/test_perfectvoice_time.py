@@ -21,6 +21,7 @@ from shared.perfectvoice_time import (
     as_fps,
     extract_sample_range,
     expected_output_sample_count,
+    file_relative_times,
     parse_timeline_frame_rate,
     place_frames,
     round_half_up,
@@ -45,6 +46,18 @@ class RoundHalfUpTests(unittest.TestCase):
             round_half_up(float("nan"))
         with self.assertRaises(ValueError):
             round_half_up(float("inf"))
+
+
+class FileRelativeTimesTests(unittest.TestCase):
+    def test_file_relative_unchanged(self):
+        t0, t1 = file_relative_times(0.2, 1.2, 10.0)
+        self.assertAlmostEqual(t0, 0.2)
+        self.assertAlmostEqual(t1, 1.2)
+
+    def test_tod_timecode_maps_onto_file(self):
+        t0, t1 = file_relative_times(75940.36, 75977.78, 37.42)
+        self.assertEqual(t0, 0.0)
+        self.assertAlmostEqual(t1, 37.42)
 
 
 class ClampHandlesTests(unittest.TestCase):

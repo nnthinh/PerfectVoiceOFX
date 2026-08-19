@@ -59,6 +59,30 @@ window.addEventListener("DOMContentLoaded", async () => {
         return (modelSelect && modelSelect.value) || "htdemucs";
     }
 
+    function currentPrefs() {
+        return {
+            model: selectedModel(),
+            dfn: !!(dfnCheck && dfnCheck.checked),
+            muteOriginal: !!(muteCheck && muteCheck.checked),
+            useCache: !(cacheCheck && !cacheCheck.checked),
+        };
+    }
+
+    function applyPrefs(prefs) {
+        if (!prefs) return;
+        if (modelSelect && (prefs.model === "htdemucs" || prefs.model === "htdemucs_ft")) {
+            modelSelect.value = prefs.model;
+        }
+        if (dfnCheck) dfnCheck.checked = prefs.dfn === true;
+        if (muteCheck) muteCheck.checked = prefs.muteOriginal === true;
+        if (cacheCheck) cacheCheck.checked = prefs.useCache !== false;
+    }
+
+    function persistPrefs() {
+        if (!window.perfectvoice.setUiPrefs) return;
+        window.perfectvoice.setUiPrefs(currentPrefs()).catch(() => {});
+    }
+
     function modelReadyMap(s) {
         if (!s) return null;
         if (s.modelsReady && typeof s.modelsReady === "object") return s.modelsReady;
@@ -228,12 +252,20 @@ window.addEventListener("DOMContentLoaded", async () => {
         syncRunButtons();
         try {
             const result = await window.perfectvoice.downloadModel(selectedModel());
-            paint(await window.perfectvoice.status());
+            paint(result && result.connected != null ? result : await window.perfectvoice.status());
             if (result && result.ok) {
                 hideDownloadProgress();
-                jobProgress.textContent = isModelReady(lastStatus, selectedModel())
-                    ? "Model ready. Select a clip with audio, then click Clean voice."
-                    : "Download finished. Refreshing…";
+                if (!isModelReady(lastStatus, selectedModel())) {
+                    paint(await window.perfectvoice.startEngine());
+                }
+                if (isModelReady(lastStatus, selectedModel())) {
+                    jobProgress.textContent =
+                        "Model ready. Select a clip with audio, then click Clean voice.";
+                } else {
+                    jobError.textContent =
+                        "Download finished but the engine still reports the model as missing.";
+                    jobProgress.textContent = "Model not ready.";
+                }
             } else if (result && result.notImplemented) {
                 hideDownloadProgress();
                 jobError.textContent = result.error || "Download is not available on this engine.";
@@ -249,6 +281,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
 
     try {
+        if (window.perfectvoice.getUiPrefs) {
+            applyPrefs(await window.perfectvoice.getUiPrefs());
+        }
         paint(await window.perfectvoice.status());
         if (!engineHealthy(lastStatus)) {
             statusEl.textContent = "Starting engine…";
@@ -262,8 +297,12 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     if (modelSelect) {
         modelSelect.addEventListener("change", () => {
+            persistPrefs();
             ensureModelDownloaded();
         });
+    }
+    for (const el of [dfnCheck, muteCheck, cacheCheck]) {
+        if (el) el.addEventListener("change", persistPrefs);
     }
 
     startBtn.addEventListener("click", async () => {

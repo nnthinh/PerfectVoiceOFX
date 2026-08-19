@@ -216,6 +216,18 @@ function isAlive() {
     return !!(session && session.child && session.child.exitCode === null);
 }
 
+async function refreshSession() {
+    if (!isAlive()) return getPublicStatus();
+    const health = parseHealth(await getHealth(session.readyUrl, session.token));
+    session.health = health;
+    try {
+        await refreshCapabilities();
+    } catch {
+        // capabilities optional
+    }
+    return getPublicStatus();
+}
+
 function getPublicStatus() {
     const enginePath = (() => {
         try {
@@ -229,7 +241,10 @@ function getPublicStatus() {
         connected: isAlive(),
         enginePath: enginePath || null,
         health: session && session.health ? session.health : null,
-        modelsReady: caps && caps.models_ready != null ? caps.models_ready : null,
+        modelsReady:
+            (caps && caps.models_ready) ||
+            (session && session.health && session.health.models_ready) ||
+            null,
         devices: caps && caps.devices ? caps.devices : null,
     };
 }
@@ -755,6 +770,7 @@ module.exports = {
     resolveEnginePath,
     startEngine,
     stopEngine,
+    refreshSession,
     getPublicStatus,
     isAlive,
     parseSseBuffer,

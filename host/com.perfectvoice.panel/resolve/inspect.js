@@ -3,6 +3,8 @@
 const {
     DEFAULT_HANDLE_S,
     actualHandles,
+    fileRelativeTimes,
+    startTcFromDump,
     parseTimelineFrameRate,
     asFps,
 } = require("./time");
@@ -171,6 +173,18 @@ function inspectClip(row, ctx) {
     const itemPropertySnapshot = item && isCallable(item, "GetProperty") ? callValue(item, "GetProperty") : {};
     const durInfo = fileDuration(dump, t1, item, srcFps);
     const handleS = ctx.handleS != null ? ctx.handleS : DEFAULT_HANDLE_S;
+    let timeShifted = false;
+    if (t0 != null && t1 != null && durInfo.fileDur != null) {
+        const fpsF = srcFps && srcFps.num > 0 ? srcFps.num / srcFps.den : null;
+        const leftFrames = item ? finiteNumber(callValue(item, "GetLeftOffset")) : null;
+        const rel = fileRelativeTimes(t0, t1, durInfo.fileDur, {
+            startTc: startTcFromDump(dump),
+            leftOffsetSeconds: leftFrames != null && fpsF ? leftFrames / fpsF : null,
+        });
+        timeShifted = rel.shifted;
+        t0 = rel.t0;
+        t1 = rel.t1;
+    }
     let handles = null;
     if (t0 != null && t1 != null && durInfo.fileDur != null) {
         handles = actualHandles(t0, t1, durInfo.fileDur, handleS);
@@ -194,6 +208,7 @@ function inspectClip(row, ctx) {
         t0,
         t1,
         sourceTimeOrigin: times.source,
+        sourceTimeShifted: timeShifted,
         recordFrame,
         durationFrames,
         fusionCompCount,
@@ -230,6 +245,12 @@ function inspectClip(row, ctx) {
     clip.rejected = verdict.rejected;
     clip.reasons = verdict.reasons;
     clip.warnings = verdict.warnings;
+    if (timeShifted) {
+        clip.warnings.push({
+            code: "source_tc_normalized",
+            message: "Source start looked like reel/TOD timecode; mapped onto the file.",
+        });
+    }
     if (durInfo.assumed && t0 != null) {
         clip.warnings.push({
             code: "file_dur_unconfirmed",

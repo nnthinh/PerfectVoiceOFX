@@ -133,6 +133,25 @@ def actual_handles(
     return h_left, h_right
 
 
+def file_relative_times(
+    t0: float,
+    t1: float,
+    file_dur: float,
+) -> tuple[float, float]:
+    """Map reel / time-of-day source TC onto [0, file_dur].
+
+    Resolve ``GetSourceStartTime()`` is often 21:05:40-style seconds, not
+    an offset from byte 0. Without that shift, extract clamps empty.
+    """
+    if file_dur <= 0 or t1 <= t0:
+        return t0, t1
+    if t0 >= -1e-3 and t1 <= file_dur + 1.0:
+        return max(0.0, t0), min(t1, file_dur)
+    if t0 >= file_dur - 1e-3:
+        return 0.0, min(t1 - t0, file_dur)
+    return t0, t1
+
+
 def extract_sample_range(
     t0: float,
     t1: float,
@@ -388,6 +407,7 @@ def extract_with_handles(
             f"file {probe.sample_rate}"
         )
     duration = probe.duration if file_dur is None else file_dur
+    t0, t1 = file_relative_times(t0, t1, duration)
     rng = extract_sample_range(t0, t1, duration, probe.sample_rate, handle_s)
     src_in = max(0, rng.src_in_sample)
     src_out = min(probe.nb_samples, rng.src_out_sample)

@@ -1,0 +1,5 @@
+# Infer stack for the DEV Python sidecar (not installed by CI).
+#   python3 -m pip install -r requirements-infer.txt
+demucs>=4.0.1
+torch>=2.1
+certifi>=2024.0.0

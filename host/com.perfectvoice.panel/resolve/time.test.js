@@ -13,6 +13,7 @@ const {
     actualHandles,
     expectedOutputSampleCount,
     extractSampleRange,
+    fileRelativeTimes,
     parseTimelineFrameRate,
     placeFrames,
     roundHalfUp,
@@ -34,6 +35,29 @@ describe("roundHalfUp", () => {
     it("rejects NaN/Inf", () => {
         assert.throws(() => roundHalfUp(Number.NaN), /finite/);
         assert.throws(() => roundHalfUp(Number.POSITIVE_INFINITY), /finite/);
+    });
+});
+
+describe("fileRelativeTimes", () => {
+    it("leaves file-relative in/out alone", () => {
+        const r = fileRelativeTimes(0.2, 1.2, 10);
+        assert.equal(r.shifted, false);
+        assert.ok(Math.abs(r.t0 - 0.2) < 1e-12);
+        assert.ok(Math.abs(r.t1 - 1.2) < 1e-12);
+    });
+
+    it("maps 21:05:40 TOD onto a 37.42s file", () => {
+        const r = fileRelativeTimes(75940.36, 75977.78, 37.42);
+        assert.equal(r.shifted, true);
+        assert.equal(r.t0, 0);
+        assert.ok(Math.abs(r.t1 - 37.42) < 1e-9);
+    });
+
+    it("subtracts Start TC when present", () => {
+        const r = fileRelativeTimes(75945.36, 75970.36, 37.42, { startTc: 75940.36 });
+        assert.equal(r.shifted, true);
+        assert.ok(Math.abs(r.t0 - 5) < 1e-9);
+        assert.ok(Math.abs(r.t1 - 30) < 1e-9);
     });
 });
 

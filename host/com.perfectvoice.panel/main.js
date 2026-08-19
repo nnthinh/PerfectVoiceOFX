@@ -3,7 +3,7 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { startEngine, stopEngine, getPublicStatus, downloadModel } = require("./engine");
+const { startEngine, stopEngine, getPublicStatus, refreshSession, downloadModel, defaultRunDir } = require("./engine");
 const { inspectSelection, placeIsolated, placeTestWav } = require("./resolve");
 const { removeAccompaniment, cancelActiveJob } = require("./jobs");
 
@@ -15,6 +15,50 @@ let mainWindow = null;
 let WorkflowIntegration = null;
 let resolveReady = false;
 let resolveError = STUDIO_REQUIRED;
+
+const ALLOWED_MODELS = new Set(["htdemucs", "htdemucs_ft"]);
+const DEFAULT_UI_PREFS = {
+    model: "htdemucs",
+    dfn: false,
+    muteOriginal: false,
+    useCache: true,
+};
+
+function uiPrefsPath() {
+    return path.join(path.dirname(defaultRunDir()), "ui.json");
+}
+
+function loadUiPrefs() {
+    const dest = uiPrefsPath();
+    try {
+        const raw = JSON.parse(fs.readFileSync(dest, "utf8"));
+        if (!raw || typeof raw !== "object") return { ...DEFAULT_UI_PREFS };
+        const model = ALLOWED_MODELS.has(raw.model) ? raw.model : DEFAULT_UI_PREFS.model;
+        return {
+            model,
+            dfn: raw.dfn === true,
+            muteOriginal: raw.muteOriginal === true,
+            useCache: raw.useCache !== false,
+        };
+    } catch {
+        return { ...DEFAULT_UI_PREFS };
+    }
+}
+
+function saveUiPrefs(next) {
+    const prefs = {
+        ...DEFAULT_UI_PREFS,
+        ...(next && typeof next === "object" ? next : {}),
+    };
+    if (!ALLOWED_MODELS.has(prefs.model)) prefs.model = DEFAULT_UI_PREFS.model;
+    prefs.dfn = prefs.dfn === true;
+    prefs.muteOriginal = prefs.muteOriginal === true;
+    prefs.useCache = prefs.useCache !== false;
+    const dest = uiPrefsPath();
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, `${JSON.stringify(prefs, null, 2)}\n`, "utf8");
+    return prefs;
+}
 
 function existsFile(p) {
     try {
@@ -104,7 +148,16 @@ function panelStatus() {
 }
 
 function registerIpc() {
-    ipcMain.handle("pv:status", async () => panelStatus());
+    ipcMain.handle("pv:getUiPrefs", async () => loadUiPrefs());
+    ipcMain.handle("pv:setUiPrefs", async (_e, next) => saveUiPrefs(next || {}));
+    ipcMain.handle("pv:status", async () => {
+        try {
+            await refreshSession();
+        } catch {
+            // keep last known health if the sidecar is mid-restart
+        }
+        return panelStatus();
+    });
     ipcMain.handle("pv:startEngine", async () => {
         try {
             const info = await startEngine();
@@ -182,7 +235,7 @@ function registerIpc() {
     });
     ipcMain.handle("pv:downloadModel", async (_e, name) => {
         try {
-            return await downloadModel(name, (data) => {
+            const result = await downloadModel(name, (data) => {
                 try {
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         mainWindow.webContents.send("pv:downloadEvent", {
@@ -194,6 +247,12 @@ function registerIpc() {
                     // ignore
                 }
             });
+            try {
+                await refreshSession();
+            } catch {
+                // ignore
+            }
+            return { ...panelStatus(), ...result };
         } catch (err) {
             return { ok: false, error: err && err.message ? err.message : String(err) };
         }

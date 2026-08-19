@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron/renderer");
 // Renderer may request status / start / jobs; it never receives the Bearer token.
 contextBridge.exposeInMainWorld("perfectvoice", {
     status: () => ipcRenderer.invoke("pv:status"),
+    getUiPrefs: () => ipcRenderer.invoke("pv:getUiPrefs"),
+    setUiPrefs: (prefs) => ipcRenderer.invoke("pv:setUiPrefs", prefs || {}),
     startEngine: () => ipcRenderer.invoke("pv:startEngine"),
     inspect: () => ipcRenderer.invoke("pv:inspect"),
     placeTestWav: (params) => ipcRenderer.invoke("pv:placeTestWav", params || {}),
