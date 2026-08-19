@@ -9,35 +9,32 @@ jobs:
     name: URL gate, compile, Appendix A tests
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install Python deps
+        run: python -m pip install -r requirements-dev.txt
       - name: Forbid official Demucs remotes in load/infer/panel paths
         run: bash scripts/ci_forbid_demucs_urls.sh
       - name: Compile engine package
-        run: python3 -m compileall -q engine/perfectvoice_engine shared scripts
+        run: python -m compileall -q engine/perfectvoice_engine shared scripts
       - name: Schema contract tests
-        run: |
-          python3 -m pip install --user 'jsonschema>=4.18'
-          python3 -m unittest tests/unit/test_schemas.py
+        run: python -m unittest tests.unit.test_schemas
       - name: Engine sidecar tests
-        run: |
-          python3 -m pip install --user 'jsonschema>=4.18' 'numpy>=1.24'
-          python3 -m unittest tests.unit.test_serve tests.unit.test_weight_fetch
+        run: python -m unittest tests.unit.test_serve tests.unit.test_weight_fetch
       - name: Install ffmpeg for extract I/O tests
         run: brew install ffmpeg
       - name: Engine extract/resample/blend tests
-        run: |
-          python3 -m pip install --user 'jsonschema>=4.18' 'numpy>=1.24' 'soxr>=0.5'
-          python3 -m unittest tests.unit.test_resample_sync tests.unit.test_blend tests.unit.test_enhance tests.unit.test_cache tests.unit.test_jobs
+        run: python -m unittest tests.unit.test_resample_sync tests.unit.test_blend tests.unit.test_enhance tests.unit.test_cache tests.unit.test_jobs
       - name: Golden fixtures, sync, cache-key pairs
-        run: |
-          python3 -m pip install --user 'jsonschema>=4.18' 'numpy>=1.24' 'soxr>=0.5'
-          python3 -m unittest tests.golden.test_sync tests.golden.test_cache_keys tests.golden.test_appendix_a
+        run: python -m unittest tests.golden.test_sync tests.golden.test_cache_keys tests.golden.test_appendix_a
       - name: Engine Separator local-repo tests
-        run: |
-          python3 -m pip install --user 'numpy>=1.24'
-          python3 -m unittest tests.unit.test_separate tests.unit.test_ola tests.unit.test_isolate_cli
+        run: python -m unittest tests.unit.test_separate tests.unit.test_ola tests.unit.test_isolate_cli
       - name: Appendix A unit tests
-        run: python3 -m unittest tests.unit.test_perfectvoice_time tests.unit.test_selection_dedupe
+        run: python -m unittest tests.unit.test_perfectvoice_time tests.unit.test_selection_dedupe
       - name: Panel resolve JS tests (dedupe + Appendix A)
         run: node --test host/com.perfectvoice.panel/resolve/*.test.js host/com.perfectvoice.panel/engine.test.js
       - name: Windows installer policy (paths, no weights, same IPC)
