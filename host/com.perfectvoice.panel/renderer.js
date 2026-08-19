@@ -442,6 +442,7 @@ window.addEventListener("DOMContentLoaded", async () => {
             jobProgress.textContent =
                 `Placed ${n} isolated WAV(s)` +
                 (names.length ? ` — ${names.join(", ")}` : "") +
+                (result.outputDir ? `  ·  ${result.outputDir}` : "") +
                 (result.mute && result.mute.muted
                     ? `  ·  muted ${result.mute.muted} original clip(s)`
                     : "");

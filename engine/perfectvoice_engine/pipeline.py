@@ -6,6 +6,7 @@ Jobs never fetch weights. Missing local repo → ``Model not installed``.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -42,6 +43,19 @@ from perfectvoice_engine.separate import SeparateRequest, separate_vocals
 
 VOICE_WAV = "voice.wav"
 META_JSON = "meta.json"
+_UNSAFE_NAME = re.compile(r"[^\w.\- ]+", re.UNICODE)
+
+
+def dest_wav_path(output_dir: str | Path, clip: Mapping[str, Any]) -> Path:
+    """WAV in the job output dir, named from the source clip stem.
+
+    ``…/SHOW/Source/C8629.MP4`` + output ``…/SHOW/PerfectVoice`` → ``C8629.wav``.
+    """
+    raw = Path(str(clip.get("source_path") or clip.get("display_name") or "voice")).stem
+    stem = _UNSAFE_NAME.sub("_", raw).strip(" ._") or "voice"
+    return Path(output_dir) / f"{stem}.wav"
+
+
 ProgressFn = Callable[[dict[str, Any]], None]
 
 
@@ -232,7 +246,8 @@ def process_clip(
     source = Path(str(clip["source_path"]))
     file_id = file_id_from_path(source)
     input_hash = clip_input_hash(clip, params, file_id=file_id, weights_digest=digest)
-    dest = Path(output_dir) / clip_hash12(input_hash) / VOICE_WAV
+    dest = dest_wav_path(output_dir, clip)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     clip_id = str(clip["clip_id"])
     if on_progress is not None:
         on_progress(
@@ -394,6 +409,7 @@ def run_job(
 __all__ = [
     "clip_input_hash",
     "clip_result",
+    "dest_wav_path",
     "job_model_name",
     "process_clip",
     "run_job",

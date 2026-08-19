@@ -10,6 +10,7 @@ const {
     clipToManifest,
     contentSample,
     placeParamsFromResult,
+    sidecarDirForSource,
 } = require("./job");
 const fs = require("fs");
 const http = require("http");
@@ -91,6 +92,34 @@ describe("buildCreateJobRequest", () => {
         assert.deepEqual(built.body.allowed_roots, params.allowed_roots);
         assert.equal(built.body.output_dir, params.output_dir);
         assert.ok(built.body.allowed_roots.includes(path.resolve("/Volumes/Media")));
+        assert.equal(built.body.output_dir, path.resolve("/Volumes/Media/PerfectVoice"));
+        assert.ok(built.body.allowed_roots.includes(built.body.output_dir));
+    });
+
+    it("puts WAVs in PerfectVoice beside the clip folder", () => {
+        const inspect = sampleInspect({
+            filePath: "/Users/ed/SHOW/Source/C8629.MP4",
+        });
+        const built = buildCreateJobRequest(inspect);
+        assert.equal(built.ok, true);
+        assert.equal(built.body.output_dir, path.resolve("/Users/ed/SHOW/PerfectVoice"));
+        assert.ok(built.body.allowed_roots.includes(path.resolve("/Users/ed/SHOW")));
+        assert.ok(built.body.allowed_roots.includes(path.resolve("/Users/ed/SHOW/Source")));
+    });
+
+    it("does not write PerfectVoice next to a volume root", () => {
+        assert.equal(
+            sidecarDirForSource("/Volumes/Media/A001.wav"),
+            path.resolve("/Volumes/Media/PerfectVoice"),
+        );
+        assert.equal(
+            sidecarDirForSource("/Volumes/Media/SHOW/Source/C8629.MP4"),
+            path.resolve("/Volumes/Media/SHOW/PerfectVoice"),
+        );
+        assert.equal(
+            sidecarDirForSource("/Users/ed/C8629.MP4"),
+            path.resolve("/Users/ed/PerfectVoice"),
+        );
     });
 
     it("does not pre-add H (t0=0.2, H=0.5 stays source_in=9600)", () => {
@@ -403,24 +432,31 @@ describe("removeAccompaniment (mock sidecar + Resolve)", () => {
         const capture = {};
         const muteCalls = [];
         const placeCalls = [];
+        const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "pv-out-"));
         const { resolve } = mockResolveTimeline({ muteCalls, placeCalls });
-        await withMockSidecar(jobSidecar({ outputPath: "/tmp/pv-missing-isolated.wav", capture }), async () => {
-            const result = await removeAccompaniment(resolve, { muteOriginal: true });
-            assert.equal(result.ok, false);
-            assert.equal(result.mute, null);
-            assert.deepEqual(muteCalls, []);
-            assert.equal(capture.body.clips[0].source_in_sample, 9600);
-            assert.equal(capture.body.params.enhancer, "none");
-            assert.equal(Object.prototype.hasOwnProperty.call(result.job, "token"), false);
-            assert.equal(Object.prototype.hasOwnProperty.call(result.job, "readyUrl"), false);
-            const status = getPublicStatus();
-            assert.equal(Object.prototype.hasOwnProperty.call(status, "token"), false);
-            assert.match(result.error || "", /WAV not found|place/i);
-        });
+        try {
+            await withMockSidecar(jobSidecar({ outputPath: "/tmp/pv-missing-isolated.wav", capture }), async () => {
+                const result = await removeAccompaniment(resolve, { muteOriginal: true, outputDir });
+                assert.equal(result.ok, false);
+                assert.equal(result.mute, null);
+                assert.deepEqual(muteCalls, []);
+                assert.equal(capture.body.clips[0].source_in_sample, 9600);
+                assert.equal(capture.body.params.enhancer, "none");
+                assert.equal(capture.body.output_dir, path.resolve(outputDir));
+                assert.equal(Object.prototype.hasOwnProperty.call(result.job, "token"), false);
+                assert.equal(Object.prototype.hasOwnProperty.call(result.job, "readyUrl"), false);
+                const status = getPublicStatus();
+                assert.equal(Object.prototype.hasOwnProperty.call(status, "token"), false);
+                assert.match(result.error || "", /WAV not found|place/i);
+            });
+        } finally {
+            fs.rmSync(outputDir, { recursive: true, force: true });
+        }
     });
 
     it("mutes only after a successful place", async () => {
         const wavPath = path.join(os.tmpdir(), `pv-isolated-${process.pid}.wav`);
+        const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "pv-out-"));
         writeSilenceWav(wavPath, 48000, 96000, 2);
         const capture = {};
         const muteCalls = [];
@@ -428,13 +464,15 @@ describe("removeAccompaniment (mock sidecar + Resolve)", () => {
         const { resolve } = mockResolveTimeline({ muteCalls, placeCalls });
         try {
             await withMockSidecar(jobSidecar({ outputPath: wavPath, capture }), async () => {
-                const result = await removeAccompaniment(resolve, { muteOriginal: true });
+                const result = await removeAccompaniment(resolve, { muteOriginal: true, outputDir });
                 assert.equal(result.ok, true, result.error);
                 assert.ok(result.mute && result.mute.muted === 1);
                 assert.deepEqual(muteCalls, [false]);
                 assert.equal(result.placed[0].handlesLeftActual, 0.2);
                 assert.equal(placeCalls[0].startFrame, 5);
                 assert.equal(capture.body.clips[0].source_in_sample, 9600);
+                assert.equal(result.outputDir, path.resolve(outputDir));
+                assert.equal(capture.body.output_dir, path.resolve(outputDir));
             });
         } finally {
             try {
@@ -442,19 +480,25 @@ describe("removeAccompaniment (mock sidecar + Resolve)", () => {
             } catch {
                 // ignore
             }
+            fs.rmSync(outputDir, { recursive: true, force: true });
         }
     });
 
     it("does not mute when done job has empty clips", async () => {
         const muteCalls = [];
+        const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "pv-out-"));
         const { resolve } = mockResolveTimeline({ muteCalls, placeCalls: [] });
-        await withMockSidecar(jobSidecar({ clips: [], capture: {} }), async () => {
-            const result = await removeAccompaniment(resolve, { muteOriginal: true });
-            assert.equal(result.ok, false);
-            assert.equal(result.mute, null);
-            assert.deepEqual(muteCalls, []);
-            assert.match(result.error, /without clip results/);
-        });
+        try {
+            await withMockSidecar(jobSidecar({ clips: [], capture: {} }), async () => {
+                const result = await removeAccompaniment(resolve, { muteOriginal: true, outputDir });
+                assert.equal(result.ok, false);
+                assert.equal(result.mute, null);
+                assert.deepEqual(muteCalls, []);
+                assert.match(result.error, /without clip results/);
+            });
+        } finally {
+            fs.rmSync(outputDir, { recursive: true, force: true });
+        }
     });
 });
 

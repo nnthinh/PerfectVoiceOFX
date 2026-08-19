@@ -17,6 +17,7 @@ const DEFAULT_WET = 0.85;
 const DEFAULT_SEGMENT = 7.8;
 const DEFAULT_OVERLAP = 0.25;
 const DEFAULT_SHIFTS = 1;
+const OUTPUT_FOLDER = "PerfectVoice";
 
 function finiteNumber(value) {
     const n = typeof value === "number" ? value : Number(value);
@@ -34,6 +35,37 @@ function defaultOutputDir() {
         "Library/Application Support/PerfectVoice/output",
         crypto.randomUUID(),
     );
+}
+
+/** True when writing here would put PerfectVoice next to a volume or drive root. */
+function isShallowBase(dir) {
+    const resolved = path.resolve(String(dir || ""));
+    const root = path.parse(resolved).root;
+    if (!resolved || resolved === root) return true;
+    // /Volumes, /Users, /mnt, C:\Media — one level under the filesystem root.
+    return path.dirname(resolved) === root;
+}
+
+/** Sibling of the folder that contains the clip: …/SHOW/Source/a.mp4 → …/SHOW/PerfectVoice */
+function sidecarDirForSource(sourcePath) {
+    const file = path.resolve(String(sourcePath));
+    const clipDir = path.dirname(file);
+    const parent = path.dirname(clipDir);
+    const base = isShallowBase(parent) ? clipDir : parent;
+    return path.join(base, OUTPUT_FOLDER);
+}
+
+function outputDirForSources(sourcePaths) {
+    const dirs = [];
+    const seen = new Set();
+    for (const raw of sourcePaths) {
+        if (!raw) continue;
+        const dir = sidecarDirForSource(raw);
+        if (seen.has(dir)) continue;
+        seen.add(dir);
+        dirs.push(dir);
+    }
+    return dirs;
 }
 
 function uniqueRoots(paths) {
@@ -237,11 +269,15 @@ function buildCreateJobRequest(inspect, options) {
             warnings,
         };
     }
-    const outputDir = opts.outputDir || defaultOutputDir();
-    const roots = allowedRootsFor(
-        manifests.map((c) => c.source_path),
-        outputDir,
-    );
+    const sources = manifests.map((c) => c.source_path);
+    const sidecarDirs = outputDirForSources(sources);
+    const outputDir = opts.outputDir || sidecarDirs[0] || defaultOutputDir();
+    if (!opts.outputDir && sidecarDirs.length > 1) {
+        warnings.push(
+            `Clips live under ${sidecarDirs.length} source folders; writing WAVs to ${outputDir}`,
+        );
+    }
+    const roots = allowedRootsFor(sources, outputDir);
     const params = buildParams(outputDir, roots, opts);
     return {
         ok: true,
@@ -286,6 +322,10 @@ module.exports = {
     placeParamsFromResult,
     allowedRootsFor,
     defaultOutputDir,
+    sidecarDirForSource,
+    outputDirForSources,
+    isShallowBase,
+    OUTPUT_FOLDER,
     jobableClips,
     resolveModel,
     resolveEnhancer,

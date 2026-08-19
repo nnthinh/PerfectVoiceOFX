@@ -6,6 +6,7 @@
  */
 
 const fs = require("fs");
+const path = require("path");
 const {
     createJob,
     getJob,
@@ -18,7 +19,12 @@ const {
 } = require("./engine");
 const { inspectSelection } = require("./resolve/inspect");
 const { muteOriginalClips, placeIsolated } = require("./resolve/place");
-const { buildCreateJobRequest, placeParamsFromResult } = require("./resolve/job");
+const {
+    buildCreateJobRequest,
+    placeParamsFromResult,
+    defaultOutputDir,
+    OUTPUT_FOLDER,
+} = require("./resolve/job");
 
 const ENGINE_UNHEALTHY = "Cannot start the engine. Check the PerfectVoice engine install.";
 const JOB_RUNNING = "A job is already running.";
@@ -188,19 +194,31 @@ async function removeAccompaniment(resolve, options, onEvent) {
     const inspect = inspectSelection(resolve, { handleS: opts.handleS });
     if (!inspect.ok) return inspect;
 
-    const built = buildCreateJobRequest(inspect, opts);
+    let built = buildCreateJobRequest(inspect, opts);
     if (!built.ok) {
         return { ok: false, error: built.error, warnings: built.warnings, inspect };
     }
 
-    try {
-        fs.mkdirSync(built.body.output_dir, { recursive: true, mode: 0o700 });
-    } catch (err) {
-        return {
-            ok: false,
-            error: `Could not create output dir: ${err && err.message ? err.message : err}`,
-            inspect,
-        };
+    emit(onEvent, {
+        type: "progress",
+        data: { message: `Creating ${OUTPUT_FOLDER} folder…` },
+    });
+    const created = ensureOutputDir(
+        built.body.output_dir,
+        built.body.clips.map((c) => c.source_path),
+    );
+    if (!created.ok) {
+        return { ok: false, error: created.error, inspect, warnings: built.warnings };
+    }
+    if (path.resolve(created.dir) !== path.resolve(built.body.output_dir)) {
+        built = buildCreateJobRequest(inspect, { ...opts, outputDir: created.dir });
+        if (!built.ok) {
+            return { ok: false, error: built.error, warnings: built.warnings, inspect };
+        }
+        built.warnings = [
+            ...(built.warnings || []),
+            `Could not write beside the source folder; using ${created.dir}`,
+        ];
     }
 
     let accepted;
@@ -307,8 +325,45 @@ async function removeAccompaniment(resolve, options, onEvent) {
         jobId: accepted.id,
         placed,
         mute,
+        outputDir: built.body.output_dir,
         warnings,
         error: placeFailed.length ? placeFailed[0].error : "",
+    };
+}
+
+function tryMkdir(dir) {
+    try {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function ensureOutputDir(preferred, sourcePaths) {
+    const candidates = [];
+    const seen = new Set();
+    const add = (dir) => {
+        if (!dir) return;
+        const resolved = path.resolve(String(dir));
+        if (seen.has(resolved)) return;
+        seen.add(resolved);
+        candidates.push(resolved);
+    };
+    add(preferred);
+    for (const src of sourcePaths || []) {
+        if (!src) continue;
+        add(path.join(path.dirname(path.resolve(String(src))), OUTPUT_FOLDER));
+    }
+    add(defaultOutputDir());
+    const errors = [];
+    for (const dir of candidates) {
+        if (tryMkdir(dir)) return { ok: true, dir };
+        errors.push(dir);
+    }
+    return {
+        ok: false,
+        error: `Could not create ${OUTPUT_FOLDER} folder: ${errors.join("; ")}`,
     };
 }
 

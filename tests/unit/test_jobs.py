@@ -48,7 +48,7 @@ from perfectvoice_engine.models import (  # noqa: E402
     MODEL_NOT_INSTALLED,
     ModelNotInstalled,
 )
-from perfectvoice_engine.pipeline import process_clip, run_job  # noqa: E402
+from perfectvoice_engine.pipeline import dest_wav_path, process_clip, run_job  # noqa: E402
 from perfectvoice_engine.serve import (  # noqa: E402
     EngineHTTPServer,
     JobStore,
@@ -319,6 +319,20 @@ def _call_name(func: ast.AST) -> str | None:
     return None
 
 
+class DestWavPathTests(unittest.TestCase):
+    def test_uses_source_stem(self) -> None:
+        dest = dest_wav_path("/SHOW/PerfectVoice", {"source_path": "/SHOW/Source/C8629.MP4"})
+        self.assertEqual(dest, Path("/SHOW/PerfectVoice/C8629.wav"))
+
+    def test_falls_back_to_display_name(self) -> None:
+        dest = dest_wav_path("/out", {"display_name": "A001_C001"})
+        self.assertEqual(dest, Path("/out/A001_C001.wav"))
+
+    def test_sanitizes_unsafe_characters(self) -> None:
+        dest = dest_wav_path("/out", {"source_path": "/x/foo/bar*baz.mov"})
+        self.assertEqual(dest.name, "bar_baz.wav")
+
+
 @unittest.skipUnless(_have_ffmpeg(), "ffmpeg not installed")
 class JobPipelineTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -397,6 +411,7 @@ class JobPipelineTests(unittest.TestCase):
         self.assertIsNotNone(FakeSeparator.instances[0].kwargs.get("callback"))
         self.assertRegex(row["input_hash"], r"^[0-9a-f]{64}$")
         wav = Path(row["output_path"])
+        self.assertEqual(wav, (self.out / "clip.wav").resolve())
         self.assertTrue(wav.is_file())
         info = inspect_wav(wav)
         self.assertEqual(info.originator, BWF_ORIGINATOR)
@@ -421,7 +436,14 @@ class JobPipelineTests(unittest.TestCase):
 
     def test_48_vs_96_different_cache_keys(self) -> None:
         r48 = self._run(self._validated(project_sample_rate=48000))
-        r96 = self._run(self._validated(project_sample_rate=96000))
+        out96 = self.out / "sr96"
+        out96.mkdir()
+        body96 = self._validated(project_sample_rate=96000)
+        body96["output_dir"] = str(out96)
+        body96["params"]["output_dir"] = str(out96)
+        body96["allowed_roots"] = list(body96["allowed_roots"]) + [str(out96)]
+        body96["params"]["allowed_roots"] = list(body96["allowed_roots"])
+        r96 = self._run(body96)
         self.assertNotEqual(r48[0]["input_hash"], r96[0]["input_hash"])
         self.assertFalse(r48[0]["cache_hit"])
         self.assertFalse(r96[0]["cache_hit"])
