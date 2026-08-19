@@ -237,7 +237,7 @@ function validInteger(val, min, max, fallback) {
 
 function buildParams(outputDir, roots, options) {
     const opts = options || {};
-    return {
+    const params = {
         schema: "perfectvoice.params.v1",
         model: resolveModel(opts),
         device: opts.device || "auto",
@@ -256,6 +256,9 @@ function buildParams(outputDir, roots, options) {
         allowed_roots: roots,
         use_cache: opts.useCache !== false,
     };
+    if (opts.mode) params.mode = opts.mode;
+    if (opts.speaker_id) params.speaker_id = opts.speaker_id;
+    return params;
 }
 
 function buildCreateJobRequest(inspect, options) {

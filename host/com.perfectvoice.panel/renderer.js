@@ -32,8 +32,17 @@ window.addEventListener("DOMContentLoaded", async () => {
     const telCompute = document.getElementById("telCompute");
     const telRam = document.getElementById("telRam");
     const telCpu = document.getElementById("telCpu");
-    const telTime = document.getElementById("telTime");
+    const tabMusic = document.getElementById("tabMusic");
+    const tabTse = document.getElementById("tabTse");
+    const musicControls = document.getElementById("musicControls");
+    const tseControls = document.getElementById("tseControls");
+    const speakerSelect = document.getElementById("speakerSelect");
+    const speakerCount = document.getElementById("speakerCount");
+    const enrollBtn = document.getElementById("enrollBtn");
+    const delSpeakerBtn = document.getElementById("delSpeakerBtn");
 
+    let currentMode = "music";
+    let enrolledSpeakers = [];
     let lastStatus = null;
     let lastInspect = null;
     let jobRunning = false;
@@ -209,12 +218,104 @@ window.addEventListener("DOMContentLoaded", async () => {
         return s.health.ok === true || s.health.status === "ok";
     }
 
+    async function loadSpeakers() {
+        if (!window.perfectvoice.getSpeakers) return;
+        try {
+            const res = await window.perfectvoice.getSpeakers();
+            if (res && res.ok && Array.isArray(res.speakers)) {
+                enrolledSpeakers = res.speakers;
+                if (speakerSelect) {
+                    speakerSelect.innerHTML = "";
+                    if (enrolledSpeakers.length === 0) {
+                        const opt = document.createElement("option");
+                        opt.value = "";
+                        opt.textContent = "No speaker profiles yet";
+                        speakerSelect.appendChild(opt);
+                    } else {
+                        for (const spk of enrolledSpeakers) {
+                            const opt = document.createElement("option");
+                            opt.value = spk.speaker_id;
+                            opt.textContent = `👤 ${spk.name} (${spk.sample_duration_s}s)`;
+                            speakerSelect.appendChild(opt);
+                        }
+                    }
+                }
+                if (speakerCount) {
+                    speakerCount.textContent = `${enrolledSpeakers.length} profile${enrolledSpeakers.length === 1 ? "" : "s"}`;
+                }
+                syncRunButtons();
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    function setMode(mode) {
+        currentMode = mode;
+        if (mode === "tse") {
+            if (tabTse) tabTse.classList.add("active");
+            if (tabMusic) tabMusic.classList.remove("active");
+            if (tseControls) tseControls.style.display = "block";
+            if (musicControls) musicControls.style.display = "none";
+            loadSpeakers();
+            appendLog("Switched to Target Speaker Extraction (TSE) Mode.");
+            appendLog("TSE isolates the enrolled speaker and eliminates background singing vocals.");
+        } else {
+            if (tabMusic) tabMusic.classList.add("active");
+            if (tabTse) tabTse.classList.remove("active");
+            if (musicControls) musicControls.style.display = "block";
+            if (tseControls) tseControls.style.display = "none";
+            appendLog("Switched to Music & Beats (Demucs) Mode.");
+        }
+        syncRunButtons();
+    }
+
+    if (tabMusic) tabMusic.addEventListener("click", () => setMode("music"));
+    if (tabTse) tabTse.addEventListener("click", () => setMode("tse"));
+
+    if (enrollBtn) {
+        enrollBtn.addEventListener("click", async () => {
+            enrollBtn.disabled = true;
+            appendLog("🎙️ Enrolling speaker voiceprint from selected timeline clip…");
+            try {
+                const res = await window.perfectvoice.enrollSpeaker();
+                if (res && res.ok && res.speaker) {
+                    appendLog(`✅ Successfully enrolled speaker "${res.speaker.name}" (${res.speaker.sample_duration_s}s sample)!`);
+                    await loadSpeakers();
+                    if (speakerSelect) speakerSelect.value = res.speaker.speaker_id;
+                } else {
+                    const err = (res && res.error) || "Enrollment failed. Select a clip with clean speech first.";
+                    appendLog(`❌ Enrollment failed: ${err}`);
+                    jobError.textContent = err;
+                }
+            } catch (err) {
+                appendLog(`❌ Enrollment error: ${err.message || err}`);
+            } finally {
+                enrollBtn.disabled = false;
+            }
+        });
+    }
+
+    if (delSpeakerBtn) {
+        delSpeakerBtn.addEventListener("click", async () => {
+            const spkId = speakerSelect ? speakerSelect.value : "";
+            if (!spkId) return;
+            try {
+                await window.perfectvoice.deleteSpeaker(spkId);
+                appendLog("Deleted speaker profile.");
+                await loadSpeakers();
+            } catch (err) {
+                appendLog(`Failed to delete profile: ${err.message || err}`);
+            }
+        });
+    }
+
     function selectedModel() {
         return (modelSelect && modelSelect.value) || "htdemucs";
     }
 
     function currentPrefs() {
-        return {
+        const prefs = {
             model: selectedModel(),
             dfn: false,
             muteOriginal: !!(muteCheck && muteCheck.checked),
@@ -222,7 +323,12 @@ window.addEventListener("DOMContentLoaded", async () => {
             wet: wetInput ? Number(wetInput.value) : 0.85,
             shifts: shiftsSelect ? parseInt(shiftsSelect.value, 10) : 1,
             overlap: overlapSelect ? Number(overlapSelect.value) : 0.25,
+            mode: currentMode,
         };
+        if (currentMode === "tse" && speakerSelect && speakerSelect.value) {
+            prefs.speaker_id = speakerSelect.value;
+        }
+        return prefs;
     }
 
     function applyPrefs(p) {
@@ -236,6 +342,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         if (p.overlap != null && overlapSelect) overlapSelect.value = String(p.overlap);
         if (p.muteOriginal != null && muteCheck) muteCheck.checked = !!p.muteOriginal;
         if (p.useCache != null && cacheCheck) cacheCheck.checked = !!p.useCache;
+        if (p.mode) setMode(p.mode);
     }
 
     function persistPrefs() {
@@ -287,7 +394,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
 
     function syncRunButtons() {
-        const ready = isModelReady(lastStatus, selectedModel());
+        const isTse = currentMode === "tse";
+        const ready = isTse
+            ? (enrolledSpeakers.length > 0 && speakerSelect && !!speakerSelect.value)
+            : isModelReady(lastStatus, selectedModel());
         const busy = jobRunning || downloading;
         if (removeBtn) removeBtn.disabled = busy || !ready;
         if (!jobRunning && cancelBtn) {
@@ -299,17 +409,27 @@ window.addEventListener("DOMContentLoaded", async () => {
         if (overlapSelect) overlapSelect.disabled = busy;
         if (muteCheck) muteCheck.disabled = busy;
         if (cacheCheck) cacheCheck.disabled = busy;
+        if (speakerSelect) speakerSelect.disabled = busy;
+        if (enrollBtn) enrollBtn.disabled = busy;
+        if (delSpeakerBtn) delSpeakerBtn.disabled = busy;
         if (busy) return;
         if (!engineHealthy(lastStatus)) {
             setBadge("idle", "Starting");
             if (logEntries.length === 0 && jobLog) jobLog.textContent = "Starting engine…";
         } else if (!ready) {
-            setBadge("idle", "Downloading");
-            if (logEntries.length === 0 && jobLog) jobLog.textContent = "Model not ready. Downloading…";
+            if (isTse) {
+                setBadge("idle", "No Speaker");
+                if (logEntries.length === 0 && jobLog) jobLog.textContent = "Select a clip with clean speech and click 'Enroll Speaker'.";
+            } else {
+                setBadge("idle", "Downloading");
+                if (logEntries.length === 0 && jobLog) jobLog.textContent = "Model not ready. Downloading…";
+            }
         } else {
             if (logEntries.length === 0 && jobLog) {
                 setBadge("idle", "Ready");
-                jobLog.textContent = "Ready. Select a clip with audio, then click Clean voice.";
+                jobLog.textContent = isTse
+                    ? "TSE Ready. Select a clip on timeline, then click Clean voice."
+                    : "Ready. Select a clip with audio, then click Clean voice.";
             }
         }
     }
@@ -361,6 +481,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         if (window.perfectvoice.getUiPrefs) {
             applyPrefs(await window.perfectvoice.getUiPrefs());
         }
+        await loadSpeakers();
         paint(await window.perfectvoice.status());
         if (!engineHealthy(lastStatus)) {
             statusEl.textContent = "Starting engine…";

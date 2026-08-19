@@ -318,6 +318,33 @@
         }
         #jobError:empty { display: none; }
 
+        .mode-tabs {
+            display: flex;
+            background: #141414;
+            border: 1px solid #282828;
+            border-radius: 4px;
+            padding: 2px;
+            gap: 3px;
+        }
+        .mode-tab {
+            flex: 1;
+            padding: 5px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            background: transparent;
+            color: #888;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.15s;
+            text-align: center;
+        }
+        .mode-tab.active {
+            background: #252525;
+            color: #3ee0c5;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        }
+
         /* Model Download Progress */
         #dlWrap {
             background: #111;
@@ -355,48 +382,78 @@
         <div id="error"></div>
         <div id="resolveNote"></div>
 
+        <!-- Mode Switcher Tabs -->
+        <div class="mode-tabs">
+            <button id="tabMusic" class="mode-tab active" type="button">🎵 Music & Beats (Demucs)</button>
+            <button id="tabTse" class="mode-tab" type="button">👤 Target Speaker (TSE)</button>
+        </div>
+
         <!-- 2. Controls Section -->
         <div class="controls-card">
-            <div class="form-row">
-                <div class="label-row">
-                    <label for="modelSelect">Preset</label>
+            <!-- Music Mode Controls -->
+            <div id="musicControls">
+                <div class="form-row">
+                    <div class="label-row">
+                        <label for="modelSelect">Demucs Preset</label>
+                    </div>
+                    <select id="modelSelect">
+                        <option value="htdemucs" selected>Fast (htdemucs)</option>
+                        <option value="htdemucs_ft">Quality (htdemucs_ft)</option>
+                    </select>
                 </div>
-                <select id="modelSelect">
-                    <option value="htdemucs" selected>Fast (htdemucs)</option>
-                    <option value="htdemucs_ft">Quality (htdemucs_ft)</option>
-                </select>
+
+                <div class="param-grid" style="margin-top: 4px;">
+                    <div class="form-row">
+                        <div class="label-row">
+                            <label for="shiftsSelect">Demucs shifts</label>
+                        </div>
+                        <select id="shiftsSelect">
+                            <option value="1" selected>1 (Fast)</option>
+                            <option value="2">2 (Better)</option>
+                            <option value="4">4 (Best quality)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="label-row">
+                            <label for="overlapSelect">Segment overlap</label>
+                        </div>
+                        <select id="overlapSelect">
+                            <option value="0.25" selected>0.25 (25%)</option>
+                            <option value="0.5">0.50 (50%)</option>
+                            <option value="0.75">0.75 (75%)</option>
+                        </select>
+                    </div>
+                </div>
             </div>
 
-            <div class="form-row">
+            <!-- TSE Mode Controls (Hidden by default) -->
+            <div id="tseControls" style="display: none;">
+                <div class="form-row">
+                    <div class="label-row">
+                        <label for="speakerSelect">Enrolled Speaker Profile</label>
+                        <span id="speakerCount" class="val-badge">0 profiles</span>
+                    </div>
+                    <div style="display: flex; gap: 6px;">
+                        <select id="speakerSelect" style="flex: 1;">
+                            <option value="">No speaker profiles yet</option>
+                        </select>
+                        <button id="delSpeakerBtn" class="btn-cancel" style="padding: 5px 10px; font-size: 11px;" title="Delete selected profile" type="button">✕</button>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 6px; margin-top: 4px;">
+                    <button id="enrollBtn" class="btn-cancel" style="flex: 1; padding: 6px 10px; font-size: 11px; background: #162d27; border: 1px solid #2dbfa6; color: #3ee0c5; border-radius: 4px; cursor: pointer;" type="button">
+                        🎙️ Enroll Speaker from Selection
+                    </button>
+                </div>
+            </div>
+
+            <div class="form-row" style="margin-top: 2px;">
                 <div class="label-row">
                     <label for="wetInput">Voice isolation mix (Wet)</label>
                     <span id="wetVal" class="val-badge">0.85 (85%)</span>
                 </div>
                 <input id="wetInput" type="range" min="0" max="1" step="0.05" value="0.85">
-            </div>
-
-            <div class="param-grid">
-                <div class="form-row">
-                    <div class="label-row">
-                        <label for="shiftsSelect">Demucs shifts</label>
-                    </div>
-                    <select id="shiftsSelect">
-                        <option value="1" selected>1 (Fast)</option>
-                        <option value="2">2 (Better)</option>
-                        <option value="4">4 (Best quality)</option>
-                    </select>
-                </div>
-
-                <div class="form-row">
-                    <div class="label-row">
-                        <label for="overlapSelect">Segment overlap</label>
-                    </div>
-                    <select id="overlapSelect">
-                        <option value="0.25" selected>0.25 (25%)</option>
-                        <option value="0.5">0.50 (50%)</option>
-                        <option value="0.75">0.75 (75%)</option>
-                    </select>
-                </div>
             </div>
 
             <div class="checkbox-row">

@@ -99,6 +99,13 @@
     },
     "use_cache": {
       "type": "boolean"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["music", "tse"]
+    },
+    "speaker_id": {
+      "type": "string"
     }
   }
 }

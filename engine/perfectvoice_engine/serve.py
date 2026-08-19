@@ -613,6 +613,15 @@ class EngineHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/v1/speakers":
+            try:
+                from perfectvoice_engine.tse import SpeakerStore
+                store = SpeakerStore()
+                speakers = [p.to_dict(include_embedding=False) for p in store.list_all()]
+                self._json(200, {"ok": True, "speakers": speakers})
+            except Exception as exc:
+                self._json(500, {"error": "internal_error", "detail": str(exc)})
+            return
         m = JOB_EVENTS.match(path)
         if m:
             self._events(m.group(1))
@@ -631,11 +640,65 @@ class EngineHandler(BaseHTTPRequestHandler):
         if path == "/v1/models/download":
             self._download_model()
             return
+        if path == "/v1/speakers/enroll":
+            self._enroll_speaker()
+            return
         m = JOB_CANCEL.match(path)
         if m:
             self._cancel_job(m.group(1))
             return
         self._json(404, {"error": "not_found"})
+
+    def do_DELETE(self) -> None:
+        self.server.last_request = time.monotonic()
+        if not self._authorized():
+            return
+        path = urlparse(self.path).path
+        m = re.compile(r"^/v1/speakers/([^/]+)$").match(path)
+        if m:
+            try:
+                from perfectvoice_engine.tse import SpeakerStore
+                store = SpeakerStore()
+                ok = store.delete(m.group(1))
+                self._json(200, {"ok": ok})
+            except Exception as exc:
+                self._json(500, {"error": "internal_error", "detail": str(exc)})
+            return
+        self._json(404, {"error": "not_found"})
+
+    def _enroll_speaker(self) -> None:
+        try:
+            body = self._read_json()
+        except ValueError as exc:
+            self._json(400, {"error": "validation_error", "detail": str(exc)})
+            return
+
+        audio_path = body.get("audio_path")
+        name = str(body.get("name") or "Speaker")
+        t0 = float(body.get("t0", 0.0))
+        t1 = float(body.get("t1", 0.0))
+
+        if not audio_path or not Path(audio_path).exists():
+            self._json(400, {"error": "file_not_found", "detail": f"audio_path {audio_path} not found"})
+            return
+
+        try:
+            from perfectvoice_engine.ffmpeg_io import decode_f32
+            from perfectvoice_engine.tse import SpeakerStore, extract_embedding
+            frames, _probe = decode_f32(Path(audio_path))
+            sr = 44100
+            if t1 > t0:
+                s0 = int(t0 * sr)
+                s1 = min(int(t1 * sr), frames.shape[-1])
+                frames = frames[:, s0:s1]
+
+            dur_s = float(frames.shape[-1]) / sr
+            embedding = extract_embedding(frames, sample_rate=sr)
+            store = SpeakerStore()
+            profile = store.enroll(name=name, embedding=embedding, sample_duration_s=dur_s)
+            self._json(200, {"ok": True, "speaker": profile.to_dict()})
+        except Exception as exc:
+            self._json(500, {"error": "enrollment_failed", "detail": str(exc)})
 
     def _authorized(self) -> bool:
         header = self.headers.get("Authorization", "")

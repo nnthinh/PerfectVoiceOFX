@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld("perfectvoice", {
     removeAccompaniment: (options) => ipcRenderer.invoke("pv:removeAccompaniment", options || {}),
     cancelJob: () => ipcRenderer.invoke("pv:cancelJob"),
     downloadModel: (name) => ipcRenderer.invoke("pv:downloadModel", name),
+    getSpeakers: () => ipcRenderer.invoke("pv:getSpeakers"),
+    enrollSpeaker: (params) => ipcRenderer.invoke("pv:enrollSpeaker", params || {}),
+    deleteSpeaker: (speakerId) => ipcRenderer.invoke("pv:deleteSpeaker", speakerId),
     onJobEvent: (cb) => {
         const listener = (_e, payload) => {
             if (typeof cb === "function") cb(payload);

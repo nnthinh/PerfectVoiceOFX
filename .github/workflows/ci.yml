@@ -30,8 +30,8 @@ jobs:
         run: python -m unittest tests.unit.test_serve tests.unit.test_weight_fetch
       - name: Install ffmpeg for extract I/O tests
         run: brew install ffmpeg
-      - name: Engine extract/resample/blend tests
-        run: python -m unittest tests.unit.test_resample_sync tests.unit.test_blend tests.unit.test_enhance tests.unit.test_cache tests.unit.test_jobs
+      - name: Engine extract/resample/blend/TSE tests
+        run: python -m unittest tests.unit.test_resample_sync tests.unit.test_blend tests.unit.test_enhance tests.unit.test_cache tests.unit.test_jobs tests.unit.test_tse
       - name: Golden fixtures, sync, cache-key pairs
         run: python -m unittest tests.golden.test_sync tests.golden.test_cache_keys tests.golden.test_appendix_a
       - name: Engine Separator local-repo tests

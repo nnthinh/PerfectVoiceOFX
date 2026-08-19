@@ -463,6 +463,33 @@ async function cancelJob(jobId) {
     return res.body;
 }
 
+async function getSpeakers() {
+    if (!isAlive()) return { ok: false, error: "Engine is not connected." };
+    const res = await requestJson("GET", "/v1/speakers");
+    if (res.status !== 200) {
+        return { ok: false, error: engineErrorMessage(res.body, `speakers status ${res.status}`) };
+    }
+    return res.body;
+}
+
+async function enrollSpeaker(params) {
+    if (!isAlive()) return { ok: false, error: "Engine is not connected." };
+    const res = await requestJson("POST", "/v1/speakers/enroll", params);
+    if (res.status !== 200) {
+        return { ok: false, error: engineErrorMessage(res.body, `enroll status ${res.status}`) };
+    }
+    return res.body;
+}
+
+async function deleteSpeaker(speakerId) {
+    if (!isAlive()) return { ok: false, error: "Engine is not connected." };
+    const res = await requestJson("DELETE", `/v1/speakers/${speakerId}`);
+    if (res.status !== 200) {
+        return { ok: false, error: engineErrorMessage(res.body, `delete status ${res.status}`) };
+    }
+    return res.body;
+}
+
 async function downloadModel(name, onProgress) {
     const model = name || "htdemucs";
     if (!isAlive()) {
@@ -780,6 +807,9 @@ module.exports = {
     getJob,
     cancelJob,
     downloadModel,
+    getSpeakers,
+    enrollSpeaker,
+    deleteSpeaker,
     refreshCapabilities,
     __setSessionForTests,
     __setPlatformForTests,

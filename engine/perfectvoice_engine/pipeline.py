@@ -312,22 +312,54 @@ def process_clip(
         model_frames = to_model_rate(frames, extracted.sample_rate)
         wav_ct = np.ascontiguousarray(model_frames.T, dtype=np.float32)
         raise_if_cancelled(cancel_event)
-        separated = separate_vocals(
-            SeparateRequest(
-                wav_44100_stereo=wav_ct,
-                model=str(params["model"]),
-                device=str(params["device"]),
-                segment=float(params["segment"]),
-                overlap=float(params["overlap"]),
-                shifts=int(params["shifts"]),
-                vocals_only_bag=bool(params["vocals_only_bag"]),
-                cancel_event=cancel_event,
-                on_progress=_fwd_progress if on_progress is not None else None,
-            ),
-            repo,
-        )
+        mode = str(params.get("mode") or "music")
+        speaker_id = str(params.get("speaker_id") or "")
+        if mode == "tse" and speaker_id:
+            from perfectvoice_engine.tse import SpeakerStore, extract_target_speaker
+            store = SpeakerStore()
+            profile = store.get(speaker_id)
+            if profile is not None:
+                isolated_arr = extract_target_speaker(
+                    wav_ct,
+                    profile.embedding,
+                    sample_rate=MODEL_SAMPLE_RATE,
+                    cancel_event=cancel_event,
+                    on_progress=_fwd_progress if on_progress is not None else None,
+                )
+                vocals = np.ascontiguousarray(isolated_arr.T, dtype=np.float32)
+            else:
+                separated = separate_vocals(
+                    SeparateRequest(
+                        wav_44100_stereo=wav_ct,
+                        model=str(params["model"]),
+                        device=str(params["device"]),
+                        segment=float(params["segment"]),
+                        overlap=float(params["overlap"]),
+                        shifts=int(params["shifts"]),
+                        vocals_only_bag=bool(params["vocals_only_bag"]),
+                        cancel_event=cancel_event,
+                        on_progress=_fwd_progress if on_progress is not None else None,
+                    ),
+                    repo,
+                )
+                vocals = np.ascontiguousarray(separated.vocals.T, dtype=np.float32)
+        else:
+            separated = separate_vocals(
+                SeparateRequest(
+                    wav_44100_stereo=wav_ct,
+                    model=str(params["model"]),
+                    device=str(params["device"]),
+                    segment=float(params["segment"]),
+                    overlap=float(params["overlap"]),
+                    shifts=int(params["shifts"]),
+                    vocals_only_bag=bool(params["vocals_only_bag"]),
+                    cancel_event=cancel_event,
+                    on_progress=_fwd_progress if on_progress is not None else None,
+                ),
+                repo,
+            )
+            vocals = np.ascontiguousarray(separated.vocals.T, dtype=np.float32)
         raise_if_cancelled(cancel_event)
-        vocals = np.ascontiguousarray(separated.vocals.T, dtype=np.float32)
         blended = blend_to_wav(
             dest,
             model_frames,

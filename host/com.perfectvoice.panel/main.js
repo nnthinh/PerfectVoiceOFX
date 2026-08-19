@@ -3,7 +3,17 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { startEngine, stopEngine, getPublicStatus, refreshSession, downloadModel, defaultRunDir } = require("./engine");
+const {
+    startEngine,
+    stopEngine,
+    getPublicStatus,
+    refreshSession,
+    downloadModel,
+    getSpeakers,
+    enrollSpeaker,
+    deleteSpeaker,
+    defaultRunDir,
+} = require("./engine");
 const { inspectSelection, placeIsolated, placeTestWav } = require("./resolve");
 const { removeAccompaniment, cancelActiveJob } = require("./jobs");
 
@@ -280,6 +290,45 @@ function registerIpc() {
                 // ignore
             }
             return { ...panelStatus(), ...result };
+        } catch (err) {
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    });
+    ipcMain.handle("pv:getSpeakers", async () => {
+        try {
+            return await getSpeakers();
+        } catch (err) {
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    });
+    ipcMain.handle("pv:enrollSpeaker", async (_e, params) => {
+        try {
+            let audioPath = params && params.audio_path;
+            let t0 = (params && params.t0) || 0;
+            let t1 = (params && params.t1) || 0;
+            let name = (params && params.name) || "Speaker";
+            if (!audioPath) {
+                const resolve = await ensureResolveInit();
+                if (!resolve) return { ok: false, error: resolveError || STUDIO_REQUIRED };
+                const insp = inspectSelection(resolve);
+                if (!insp || !insp.clips || !insp.clips.length) {
+                    return { ok: false, error: "Select a clip on the timeline first to enroll voice." };
+                }
+                const first = insp.clips[0];
+                audioPath = first.source_path || first.path;
+                const sr = first.source_sample_rate || 44100;
+                t0 = first.source_in_sample != null ? first.source_in_sample / sr : 0;
+                t1 = first.source_out_sample != null ? first.source_out_sample / sr : t0 + 3.0;
+                name = first.clip_name || first.name || name;
+            }
+            return await enrollSpeaker({ audio_path: audioPath, name, t0, t1 });
+        } catch (err) {
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+    });
+    ipcMain.handle("pv:deleteSpeaker", async (_e, speakerId) => {
+        try {
+            return await deleteSpeaker(speakerId);
         } catch (err) {
             return { ok: false, error: err && err.message ? err.message : String(err) };
         }
