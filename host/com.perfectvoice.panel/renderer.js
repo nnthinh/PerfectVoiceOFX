@@ -276,15 +276,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (enrollBtn) {
         enrollBtn.addEventListener("click", async () => {
             enrollBtn.disabled = true;
-            appendLog("🎙️ Enrolling speaker voiceprint from selected timeline clip…");
+            appendLog("🎙️ Enrolling speaker voiceprint: Pre-separating vocal sample via fast Demucs…");
             try {
                 const res = await window.perfectvoice.enrollSpeaker();
                 if (res && res.ok && res.speaker) {
-                    appendLog(`✅ Successfully enrolled speaker "${res.speaker.name}" (${res.speaker.sample_duration_s}s sample)!`);
+                    appendLog(`✅ Successfully enrolled speaker "${res.speaker.name}" (${res.speaker.sample_duration_s}s clean vocal sample)!`);
+                    appendLog("Profile is ready. Select target clip(s) and click 'Clean voice' in TSE mode.");
                     await loadSpeakers();
                     if (speakerSelect) speakerSelect.value = res.speaker.speaker_id;
                 } else {
-                    const err = (res && res.error) || "Enrollment failed. Select a clip with clean speech first.";
+                    const err = (res && res.error) || "Enrollment failed. Select a clip on timeline first.";
                     appendLog(`❌ Enrollment failed: ${err}`);
                     jobError.textContent = err;
                 }

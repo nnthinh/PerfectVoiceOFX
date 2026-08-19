@@ -684,7 +684,11 @@ class EngineHandler(BaseHTTPRequestHandler):
 
         try:
             from perfectvoice_engine.ffmpeg_io import decode_f32
+            from perfectvoice_engine.models import default_local_repo, is_model_ready
+            from perfectvoice_engine.resample import to_model_rate
+            from perfectvoice_engine.separate import SeparateRequest, separate_vocals
             from perfectvoice_engine.tse import SpeakerStore, extract_embedding
+
             frames, probe = decode_f32(Path(audio_path))
             sr = probe.sample_rate or 44100
             # decode_f32 returns [num_samples, channels], transpose to [channels, num_samples]
@@ -699,8 +703,36 @@ class EngineHandler(BaseHTTPRequestHandler):
                 if s1 > s0:
                     frames = frames[:, s0:s1]
 
+            # 1. Pre-clean reference sample with fast Demucs separation to strip music/drums/bass
+            repo = default_local_repo()
+            sample_441 = to_model_rate(frames.T, sr).T  # [channels, samples] at 44.1k
+            if sample_441.shape[0] == 1:
+                sample_441 = np.repeat(sample_441, 2, axis=0)
+            elif sample_441.shape[0] > 2:
+                sample_441 = sample_441[:2]
+
+            voice_sample = sample_441
+            if is_model_ready("htdemucs", repo):
+                try:
+                    dur = float(sample_441.shape[-1]) / 44100.0
+                    sep_res = separate_vocals(
+                        SeparateRequest(
+                            wav_44100_stereo=np.ascontiguousarray(sample_441.T, dtype=np.float32),
+                            model="htdemucs",
+                            device="auto",
+                            segment=float(min(7.8, max(1.0, dur))),
+                            overlap=0.25,
+                            shifts=1,
+                            vocals_only_bag=False,
+                        ),
+                        repo,
+                    )
+                    voice_sample = sep_res.vocals.T
+                except Exception:
+                    voice_sample = sample_441
+
             dur_s = round(float(frames.shape[-1]) / sr, 2)
-            embedding = extract_embedding(frames, sample_rate=sr)
+            embedding = extract_embedding(voice_sample, sample_rate=44100)
             store = SpeakerStore()
             profile = store.enroll(name=name, embedding=embedding, sample_duration_s=dur_s)
             self._json(200, {"ok": True, "speaker": profile.to_dict()})
