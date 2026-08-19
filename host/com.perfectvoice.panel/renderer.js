@@ -27,14 +27,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     const dlWrap = document.getElementById("dlWrap");
     const dlLabel = document.getElementById("dlLabel");
     const dlBar = document.getElementById("dlBar");
-    const dlLog = document.getElementById("dlLog");
-    const telemetryWrap = document.getElementById("telemetryWrap");
-    const telCompute = document.getElementById("telCompute");
-    const telRam = document.getElementById("telRam");
-    const telCpu = document.getElementById("telCpu");
-    const tabMusic = document.getElementById("tabMusic");
-    const tabTse = document.getElementById("tabTse");
-    const musicControls = document.getElementById("musicControls");
     const speakerSelect = document.getElementById("speakerSelect");
     const speakerCount = document.getElementById("speakerCount");
     const enrollBtn = document.getElementById("enrollBtn");
@@ -49,12 +41,15 @@ window.addEventListener("DOMContentLoaded", async () => {
     let cancelTimer = null;
     let jobStartTime = null;
     let jobTimerInterval = null;
+    let dlStartTime = null;
+    let lastLoggedDlMilestone = -1;
     let logEntries = [];
 
     let lastOverallPct = 0;
     let lastAudioDurS = 0;
     let lastShiftIdx = 0;
     let lastSpeed = 0;
+    let lastLoggedMessage = "";
 
     function formatTime() {
         const d = new Date();
@@ -86,6 +81,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     function clearLog(initialLine) {
         logEntries = [];
+        lastLoggedMessage = "";
         if (initialLine) {
             appendLog(initialLine);
         } else if (jobLog) {
@@ -102,17 +98,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
 
     function startJobTelemetry() {
-        if (telemetryWrap) telemetryWrap.hidden = false;
         jobStartTime = Date.now();
         lastOverallPct = 0;
         lastAudioDurS = 0;
         lastShiftIdx = 0;
         lastSpeed = 0;
-
-        if (telCompute) telCompute.textContent = "Apple Metal (MPS)";
-        if (telRam) telRam.textContent = "Measuring…";
-        if (telCpu) telCpu.textContent = "Active";
-        if (telTime) telTime.textContent = "0.0s";
 
         if (statElapsed) statElapsed.textContent = "00:00";
         if (statEta) statEta.textContent = "Estimating…";
@@ -127,7 +117,6 @@ window.addEventListener("DOMContentLoaded", async () => {
         jobTimerInterval = setInterval(() => {
             if (!jobStartTime) return;
             const E = (Date.now() - jobStartTime) / 1000;
-            if (telTime) telTime.textContent = `${E.toFixed(1)}s`;
             if (statElapsed) statElapsed.textContent = formatSecs(E);
 
             if (lastOverallPct > 0 && E >= 1.0) {
@@ -149,7 +138,6 @@ window.addEventListener("DOMContentLoaded", async () => {
         }
         if (jobStartTime) {
             const E = (Date.now() - jobStartTime) / 1000;
-            if (telTime) telTime.textContent = isCached ? `${E.toFixed(1)}s (Cache)` : `${E.toFixed(1)}s`;
             if (statElapsed) statElapsed.textContent = formatSecs(E);
             if (statEta) statEta.textContent = "00:00 (Done)";
             if (statSpeed) {
@@ -159,33 +147,6 @@ window.addEventListener("DOMContentLoaded", async () => {
                         ? `${lastSpeed.toFixed(1)}× RT`
                         : "Done";
             }
-        }
-        if (telCpu) {
-            telCpu.textContent = success ? "Idle" : "—";
-        }
-    }
-
-    function updateTelemetry(data) {
-        if (!telemetryWrap) return;
-        if (!data) return;
-        telemetryWrap.hidden = false;
-        if (data.device && telCompute) {
-            const dev = String(data.device).toLowerCase();
-            if (dev === "mps") {
-                telCompute.textContent = "Apple Metal (MPS)";
-            } else if (dev === "cuda") {
-                telCompute.textContent = "NVIDIA CUDA (GPU)";
-            } else {
-                telCompute.textContent = "CPU (Float32)";
-            }
-        }
-        if (data.memory_mb != null && Number(data.memory_mb) > 0 && telRam) {
-            const mb = Number(data.memory_mb);
-            telRam.textContent = mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
-        }
-        if (data.cpu_percent != null && Number(data.cpu_percent) >= 0 && telCpu) {
-            const cpu = Math.round(Number(data.cpu_percent));
-            telCpu.textContent = cpu > 0 ? `${cpu}%` : "Active";
         }
     }
 
@@ -290,7 +251,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
 
     function selectedModel() {
-        return (modelSelect && modelSelect.value) || "htdemucs";
+        return (modelSelect && modelSelect.value) || "mel_band_roformer";
     }
 
     function currentPrefs() {
@@ -333,6 +294,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
 
     function isModelReady(status, name) {
+        if (name === "mel_band_roformer") {
+            if (!status || !status.health || !status.health.models_ready) return false;
+            return status.health.models_ready.mel_band_roformer === true;
+        }
         if (!status || !status.health || !status.health.models_ready) return false;
         return !!status.health.models_ready[name];
     }
@@ -340,12 +305,18 @@ window.addEventListener("DOMContentLoaded", async () => {
     function paintDownloadProgress(data) {
         if (!data || typeof data !== "object") return;
         downloading = true;
+        if (!dlStartTime) dlStartTime = Date.now();
         if (dlWrap) dlWrap.hidden = false;
         const done = Number(data.bytes_done) || 0;
         const total = Number(data.bytes_total) || 0;
         const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+        const file = data.filename || "Mel-Band RoFormer Studio AI (44.1kHz)";
+
+        // 1. Badge
+        setBadge("running", "Downloading");
+
+        // 2. Mini progress bar
         if (dlBar) dlBar.style.width = `${pct}%`;
-        const file = data.filename || "weights";
         if (dlLabel) {
             dlLabel.textContent = total > 0
                 ? `Downloading ${file} (${pct}%)`
@@ -356,103 +327,54 @@ window.addEventListener("DOMContentLoaded", async () => {
                 ? `${file}\n${formatBytes(done)} / ${formatBytes(total)}`
                 : `${file}\n${formatBytes(done)}`;
         }
-        if (total > 0) {
-            appendLog(`Downloading ${file}: ${pct}% (${formatBytes(done)} / ${formatBytes(total)})`);
+
+        // 3. Main Monitor Bars (Total Progress & Current Pass)
+        if (overallBar) overallBar.style.width = `${pct}%`;
+        if (overallPctText) overallPctText.textContent = `${pct}%`;
+        if (currentPassTitle) currentPassTitle.textContent = "Downloading Weights";
+        if (currentBar) currentBar.style.width = `${pct}%`;
+        if (currentPassPctText) currentPassPctText.textContent = total > 0 ? `${formatBytes(done)} / ${formatBytes(total)}` : "Connecting…";
+        if (statPasses) statPasses.textContent = "Weight Sync";
+
+        // 4. Elapsed Time, Speed & ETA
+        const elapsedS = (Date.now() - dlStartTime) / 1000;
+        if (statElapsed) statElapsed.textContent = formatSecs(elapsedS);
+        if (elapsedS > 0.5 && done > 0) {
+            const speedBytes = done / elapsedS;
+            const speedMb = speedBytes / (1024 * 1024);
+            if (statSpeed) statSpeed.textContent = `${speedMb.toFixed(1)} MB/s`;
+            if (total > done && speedBytes > 0) {
+                const remS = (total - done) / speedBytes;
+                if (statEta) statEta.textContent = `~${formatSecs(remS)}`;
+            }
+        }
+
+        // 5. Milestone log every 10%
+        const milestone = Math.floor(pct / 10) * 10;
+        if (total > 0 && milestone > lastLoggedDlMilestone && milestone > 0) {
+            lastLoggedDlMilestone = milestone;
+            appendLog(`Downloading ${file}: ${milestone}% (${formatBytes(done)} / ${formatBytes(total)})`);
         }
     }
 
     function hideDownloadProgress() {
         if (dlWrap) dlWrap.hidden = true;
         if (dlBar) dlBar.style.width = "0";
+        if (currentPassTitle) currentPassTitle.textContent = "Current Pass";
+        if (currentPassPctText) currentPassPctText.textContent = "—";
+        if (!jobRunning) {
+            if (overallBar) overallBar.style.width = "0%";
+            if (overallPctText) overallPctText.textContent = "0%";
+            if (currentBar) currentBar.style.width = "0%";
+            if (statEta) statEta.textContent = "—";
+            if (statSpeed) statSpeed.textContent = "—";
+            if (statPasses) statPasses.textContent = "—";
+        }
+        dlStartTime = null;
+        lastLoggedDlMilestone = -1;
     }
 
-    function syncRunButtons() {
-        const ready = isModelReady(lastStatus, selectedModel());
-        const busy = jobRunning || downloading;
-        if (removeBtn) removeBtn.disabled = busy || !ready;
-        if (!jobRunning && cancelBtn) {
-            cancelBtn.disabled = true;
-        }
-        if (modelSelect) modelSelect.disabled = busy;
-        if (muteCheck) muteCheck.disabled = busy;
-        if (cacheCheck) cacheCheck.disabled = busy;
-        if (speakerSelect) speakerSelect.disabled = busy;
-        if (enrollBtn) enrollBtn.disabled = busy;
-        if (delSpeakerBtn) delSpeakerBtn.disabled = busy;
-        if (busy) return;
-        if (!engineHealthy(lastStatus)) {
-            setBadge("idle", "Starting");
-            if (logEntries.length === 0 && jobLog) jobLog.textContent = "Starting engine…";
-        } else if (!ready) {
-            setBadge("idle", "Downloading");
-            if (logEntries.length === 0 && jobLog) jobLog.textContent = "Model not ready. Downloading…";
-        } else {
-            if (logEntries.length === 0 && jobLog) {
-                setBadge("idle", "Ready");
-                jobLog.textContent = "Ready. Place playhead on speaker's voice, select clip, then click Clean voice.";
-            }
-        }
-    }
-
-    async function ensureModelDownloaded() {
-        if (downloading) return;
-        if (!engineHealthy(lastStatus)) return;
-        if (isModelReady(lastStatus, selectedModel())) {
-            hideDownloadProgress();
-            syncRunButtons();
-            return;
-        }
-        downloading = true;
-        jobError.textContent = "";
-        setBadge("running", "Downloading");
-        appendLog(`Model ${selectedModel()} not found locally. Starting download…`);
-        paintDownloadProgress({ filename: selectedModel(), bytes_done: 0, bytes_total: 0 });
-        syncRunButtons();
-        try {
-            const result = await window.perfectvoice.downloadModel(selectedModel());
-            paint(result && result.connected != null ? result : await window.perfectvoice.status());
-            if (result && result.ok) {
-                hideDownloadProgress();
-                if (!isModelReady(lastStatus, selectedModel())) {
-                    paint(await window.perfectvoice.startEngine());
-                }
-                if (isModelReady(lastStatus, selectedModel())) {
-                    setBadge("idle", "Ready");
-                    appendLog("Model downloaded and ready.");
-                } else {
-                    setBadge("error", "Missing");
-                    jobError.textContent = "Download finished but engine still reports model as missing.";
-                }
-            } else if (result && result.notImplemented) {
-                hideDownloadProgress();
-                jobError.textContent = result.error || "Download is not available on this engine.";
-            } else {
-                jobError.textContent = (result && result.error) || "Model download failed.";
-            }
-        } catch (err) {
-            jobError.textContent = String(err && err.message ? err.message : err);
-        } finally {
-            downloading = false;
-            syncRunButtons();
-        }
-    }
-
-    try {
-        if (window.perfectvoice.getUiPrefs) {
-            applyPrefs(await window.perfectvoice.getUiPrefs());
-        }
-        await loadSpeakers();
-        paint(await window.perfectvoice.status());
-        if (!engineHealthy(lastStatus)) {
-            statusEl.textContent = "Starting engine…";
-            paint(await window.perfectvoice.startEngine());
-        }
-        await ensureModelDownloaded();
-    } catch (err) {
-        errorEl.textContent = String(err && err.message ? err.message : err);
-        syncRunButtons();
-    }
-
+    // Register event listeners immediately before any async network operations
     if (modelSelect) {
         modelSelect.addEventListener("change", () => {
             persistPrefs();
@@ -484,8 +406,6 @@ window.addEventListener("DOMContentLoaded", async () => {
                     paintDownloadProgress(data);
                     return;
                 }
-                updateTelemetry(data);
-
                 if (data.overall_pct != null) lastOverallPct = Number(data.overall_pct);
                 if (data.audio_dur_s != null) lastAudioDurS = Number(data.audio_dur_s);
 
@@ -516,9 +436,10 @@ window.addEventListener("DOMContentLoaded", async () => {
                 // 2. Update Current Pass Progress Bar & Text
                 if (currentBar) currentBar.style.width = `${chunkPct}%`;
                 if (currentPassTitle) {
+                    const engineName = selectedModel() === "mel_band_roformer" ? "Mel-Band RoFormer" : "Demucs";
                     currentPassTitle.textContent = data.stage_name || (
                         currentPass === 1
-                            ? `Pass 1/2: Demucs Separation · Chunk ${chunkIdx}/${totalChunks}`
+                            ? `Pass 1/2: ${engineName} Separation · Chunk ${chunkIdx}/${totalChunks}`
                             : `Pass 2/2: Target Speaker Filter · Frame ${chunkIdx}/${totalChunks}`
                     );
                 }
@@ -531,15 +452,17 @@ window.addEventListener("DOMContentLoaded", async () => {
                 // 3. Smart Terminal Logging (Stage transitions & progress milestones)
                 const passKey = `${currentPass}_${shiftIdx}`;
                 if (passKey !== lastShiftIdx) {
+                    const engineName = selectedModel() === "mel_band_roformer" ? "Mel-Band RoFormer SOTA" : "Demucs";
                     if (currentPass === 1) {
-                        appendLog(`[1/2] Separating background music & beats via Demucs (${totalChunks} chunks)...`);
+                        appendLog(`[1/2] Separating background music & beats via ${engineName} (${totalChunks} chunks)...`);
                     } else {
                         appendLog(`[2/2] Filtering target speaker & suppressing background lyrics (-60dB)...`);
                     }
                     lastShiftIdx = passKey;
                 }
-                if (data.message && (chunkIdx === 1 || chunkIdx === totalChunks)) {
+                if (data.message && data.message !== lastLoggedMessage) {
                     appendLog(data.message);
+                    lastLoggedMessage = data.message;
                 }
             }
         });
@@ -548,6 +471,78 @@ window.addEventListener("DOMContentLoaded", async () => {
         window.perfectvoice.onDownloadEvent((ev) => {
             paintDownloadProgress((ev && ev.data) || ev || {});
         });
+    }
+
+    function syncRunButtons() {
+        const ready = isModelReady(lastStatus, selectedModel());
+        const busy = jobRunning || downloading;
+        if (removeBtn) removeBtn.disabled = busy || !ready;
+        if (!jobRunning && cancelBtn) {
+            cancelBtn.disabled = true;
+        }
+        if (modelSelect) modelSelect.disabled = busy;
+        if (muteCheck) muteCheck.disabled = busy;
+        if (cacheCheck) cacheCheck.disabled = busy;
+        if (speakerSelect) speakerSelect.disabled = busy;
+        if (enrollBtn) enrollBtn.disabled = busy;
+        if (delSpeakerBtn) delSpeakerBtn.disabled = busy;
+        if (busy) return;
+        if (!engineHealthy(lastStatus)) {
+            setBadge("idle", "Starting");
+            if (logEntries.length === 0 && jobLog) jobLog.textContent = "Starting engine…";
+        } else if (!ready) {
+            setBadge("idle", "Downloading");
+            if (logEntries.length === 0 && jobLog) jobLog.textContent = "Model weights missing. Starting download…";
+        } else {
+            if (logEntries.length === 0 && jobLog) {
+                setBadge("idle", "Ready");
+                jobLog.textContent = "Ready. Place playhead on speaker's voice, select clip, then click Clean voice.";
+            }
+        }
+    }
+
+    async function ensureModelDownloaded() {
+        if (downloading) return;
+        if (!engineHealthy(lastStatus)) return;
+        if (isModelReady(lastStatus, selectedModel())) {
+            hideDownloadProgress();
+            syncRunButtons();
+            return;
+        }
+        downloading = true;
+        jobError.textContent = "";
+        setBadge("running", "Downloading");
+        appendLog(`⭐ First-time setup: Mel-Band RoFormer Studio AI model not found locally.`);
+        appendLog(`Downloading official Kimberley Jensen SOTA checkpoint (~871 MB)...`);
+        paintDownloadProgress({ filename: "Mel-Band RoFormer (SOTA 44.1kHz)", bytes_done: 0, bytes_total: 0 });
+        syncRunButtons();
+        try {
+            const result = await window.perfectvoice.downloadModel(selectedModel());
+            paint(result && result.connected != null ? result : await window.perfectvoice.status());
+            if (result && result.ok) {
+                hideDownloadProgress();
+                if (!isModelReady(lastStatus, selectedModel())) {
+                    paint(await window.perfectvoice.startEngine());
+                }
+                if (isModelReady(lastStatus, selectedModel())) {
+                    setBadge("idle", "Ready");
+                    appendLog("✅ Mel-Band RoFormer model installed and verified successfully!");
+                } else {
+                    setBadge("error", "Missing");
+                    jobError.textContent = "Download finished but engine still reports model as missing.";
+                }
+            } else if (result && result.notImplemented) {
+                hideDownloadProgress();
+                jobError.textContent = result.error || "Download is not available on this engine.";
+            } else {
+                jobError.textContent = (result && result.error) || "Model download failed.";
+            }
+        } catch (err) {
+            jobError.textContent = String(err && err.message ? err.message : err);
+        } finally {
+            downloading = false;
+            syncRunButtons();
+        }
     }
 
     function setJobRunning(running) {
@@ -566,15 +561,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
 
     removeBtn.addEventListener("click", async () => {
-        jobError.textContent = "";
-        setJobRunning(true);
-        startJobTelemetry();
-        setBadge("running", "Running");
-        clearLog("Starting Clean voice job…");
-        appendLog("Inspecting timeline selection…");
         let success = false;
         let isCached = false;
         try {
+            jobError.textContent = "";
+            setJobRunning(true);
+            startJobTelemetry();
+            setBadge("running", "Running");
+            clearLog("Starting Clean voice job…");
+            appendLog("Inspecting timeline selection…");
+
             const prefs = currentPrefs();
             const result = await window.perfectvoice.removeAccompaniment(prefs);
             if (!result || !result.ok) {
@@ -651,4 +647,20 @@ window.addEventListener("DOMContentLoaded", async () => {
             jobError.textContent = String(err && err.message ? err.message : err);
         }
     });
+
+    try {
+        if (window.perfectvoice.getUiPrefs) {
+            applyPrefs(await window.perfectvoice.getUiPrefs());
+        }
+        await loadSpeakers();
+        paint(await window.perfectvoice.status());
+        if (!engineHealthy(lastStatus)) {
+            statusEl.textContent = "Starting engine…";
+            paint(await window.perfectvoice.startEngine());
+        }
+        await ensureModelDownloaded();
+    } catch (err) {
+        errorEl.textContent = String(err && err.message ? err.message : err);
+        syncRunButtons();
+    }
 });

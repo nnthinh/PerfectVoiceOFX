@@ -185,7 +185,7 @@ async function removeAccompaniment(resolve, options, onEvent) {
     const started = await ensureEngine(onEvent);
     if (!started.ok) return started;
 
-    const model = opts.model || "htdemucs";
+    const model = opts.model || "mel_band_roformer";
     const weights = await ensureWeights(model, onEvent);
     if (!weights.ok) {
         return { ...weights, ...getPublicStatus() };

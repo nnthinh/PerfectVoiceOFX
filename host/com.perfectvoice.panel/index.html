@@ -189,14 +189,14 @@
             opacity: 0.45;
         }
 
-        /* 4. Inference Monitor (Flex-grow fills all remaining space) */
+        /* 4. Inference Monitor (Flex-grow fills all remaining vertical space) */
         .job-card {
             flex: 1;
-            min-height: 130px;
+            min-height: 140px;
             display: flex;
             flex-direction: column;
             background: #111;
-            border: 1px solid #282828;
+            border: 1px solid #222;
             border-radius: 4px;
             overflow: hidden;
         }
@@ -204,14 +204,16 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            padding: 6px 10px;
             background: #161616;
-            padding: 5px 10px;
             border-bottom: 1px solid #222;
-            font-size: 10px;
+        }
+        .job-title {
+            font-size: 11px;
             font-weight: 700;
-            color: #777;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            color: #aaa;
         }
         .job-badge {
             font-family: ui-monospace, SFMono-Regular, monospace;
@@ -279,15 +281,15 @@
         .stat-k { color: #666; }
         .stat-v { color: #eee; font-weight: 600; }
 
-        /* Terminal Activity Log (Compact 1/2 height) */
+        /* Terminal Activity Log (Auto-fills all remaining height down to bottom) */
         .job-log {
-            height: 48px;
-            max-height: 48px;
+            flex: 1;
+            min-height: 80px;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 10px;
-            line-height: 1.4;
+            font-size: 10.5px;
+            line-height: 1.45;
             color: #ccc;
-            padding: 5px 8px;
+            padding: 7px 10px;
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-all;
@@ -295,29 +297,61 @@
             border-top: 1px solid #1a1a1a;
         }
 
-        /* 5. Hardware Telemetry Bar (Pinned at bottom) */
-        .telemetry-box {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background: #121212;
-            border: 1px solid #242424;
-            border-radius: 4px;
-            padding: 5px 10px;
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 10.5px;
-        }
-        .telemetry-box[hidden] { display: none; }
-        .telemetry-item { display: flex; align-items: center; gap: 4px; }
-        .telemetry-label { color: #777; }
-        .telemetry-val { color: #3ee0c5; font-weight: 600; }
-
         #error, #resolveNote, #jobError {
             color: #ff6b6b;
             font-size: 11px;
             margin: 0;
         }
         #jobError:empty { display: none; }
+
+        .mode-tabs {
+            display: flex;
+            background: #141414;
+            border: 1px solid #282828;
+            border-radius: 4px;
+            padding: 2px;
+            gap: 3px;
+            margin-bottom: 8px;
+        }
+        .mode-tab {
+            flex: 1;
+            padding: 5px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            background: transparent;
+            color: #888;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.15s;
+            text-align: center;
+        }
+        .mode-tab.active {
+            background: #252525;
+            color: #3ee0c5;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        }
+        .prompt-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
+        }
+        .chip {
+            background: #1c1c1c;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 2px 7px;
+            font-size: 10px;
+            color: #aaa;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .chip:hover {
+            background: #282828;
+            color: #3ee0c5;
+            border-color: #3ee0c5;
+        }
 
         /* Model Download Progress */
         #dlWrap {
@@ -344,7 +378,7 @@
         <header class="app-header">
             <div class="app-brand">
                 <span class="app-title">PerfectVoice</span>
-                <span class="app-tag">Target Speaker Isolation</span>
+                <span class="app-tag">Universal Audio & Voice Isolation</span>
             </div>
             <div class="app-status-box">
                 <span id="statusDot" class="status-dot off"></span>
@@ -358,19 +392,14 @@
 
         <!-- 2. Controls Section -->
         <div class="controls-card">
-            <div style="background: #152420; border: 1px solid #1f4239; border-radius: 4px; padding: 7px 9px; font-size: 11px; line-height: 1.4; color: #76cfbf; margin-bottom: 6px;">
-                🎯 <strong>1-Click Voice Isolation:</strong><br>
+            <div style="background: #152420; border: 1px solid #1f4239; border-radius: 4px; padding: 6px 8px; font-size: 11px; line-height: 1.4; color: #76cfbf; margin-bottom: 8px;">
+                🎯 <strong>1-Click Studio Voice Isolation:</strong><br>
                 Place timeline playhead on speaker's voice, select clip, then click <strong>Clean voice</strong>.
             </div>
 
-            <div class="form-row">
-                <div class="label-row">
-                    <label for="modelSelect">AI Separation Preset</label>
-                </div>
-                <select id="modelSelect">
-                    <option value="htdemucs" selected>Fast (Light Demucs + TSE)</option>
-                    <option value="htdemucs_ft">Quality (Full Demucs + TSE)</option>
-                </select>
+            <div style="display: flex; align-items: center; justify-content: space-between; background: #181c1b; border: 1px solid #283e37; border-radius: 4px; padding: 7px 10px; font-size: 11px; color: #a3e6d8; margin-bottom: 6px;">
+                <span>⭐ AI Engine: <strong>Mel-Band RoFormer (SOTA 44.1kHz)</strong></span>
+                <span style="font-size: 10px; color: #52a696; background: #0e201b; padding: 2px 6px; border-radius: 3px; border: 1px solid #1f4239;">Studio 2-Stage</span>
             </div>
 
             <div class="checkbox-row" style="margin-top: 6px;">
@@ -445,26 +474,6 @@
 
             <!-- Terminal Activity Log (Scrolls internally) -->
             <div id="jobLog" class="job-log">Ready. Select a clip on the timeline, then click Clean voice.</div>
-        </div>
-
-        <!-- 4. Hardware Telemetry Bar (Pinned at bottom) -->
-        <div id="telemetryWrap" class="telemetry-box" hidden>
-            <div class="telemetry-item">
-                <span class="telemetry-label">Compute:</span>
-                <span id="telCompute" class="telemetry-val">—</span>
-            </div>
-            <div class="telemetry-item">
-                <span class="telemetry-label">RAM:</span>
-                <span id="telRam" class="telemetry-val">—</span>
-            </div>
-            <div class="telemetry-item">
-                <span class="telemetry-label">CPU:</span>
-                <span id="telCpu" class="telemetry-val">—</span>
-            </div>
-            <div class="telemetry-item">
-                <span class="telemetry-label">Time:</span>
-                <span id="telTime" class="telemetry-val">—</span>
-            </div>
         </div>
 
         <div id="jobError"></div>

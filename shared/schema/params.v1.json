@@ -30,7 +30,7 @@
     },
     "model": {
       "type": "string",
-      "enum": ["htdemucs", "htdemucs_ft"]
+      "enum": ["mel_band_roformer", "htdemucs", "htdemucs_ft"]
     },
     "device": {
       "type": "string",
@@ -102,7 +102,10 @@
     },
     "mode": {
       "type": "string",
-      "enum": ["music", "tse"]
+      "enum": ["music", "tse", "audiosep"]
+    },
+    "text_query": {
+      "type": "string"
     },
     "speaker_id": {
       "type": "string"

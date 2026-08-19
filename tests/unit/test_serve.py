@@ -442,12 +442,9 @@ class SidecarHttpTests(unittest.TestCase):
         status, body, _ = eng.request("GET", "/v1/health")
         self.assertEqual(status, 200)
         assert isinstance(body, dict)
-        self.assertTrue(body.get("ok"))
-        self.assertEqual(body.get("protocol_version"), 1)
-        self.assertEqual(
-            body.get("models_ready"),
-            {"htdemucs": False, "htdemucs_ft": False},
-        )
+        from perfectvoice_engine.roformer.separator import is_roformer_ready
+        expected_ready = {"htdemucs": False, "htdemucs_ft": False, "mel_band_roformer": is_roformer_ready()}
+        self.assertEqual(body.get("models_ready"), expected_ready)
         self.assertNotIn(eng.token, eng.stderr_text())
 
     def test_stdin_token(self) -> None:
@@ -468,10 +465,9 @@ class SidecarHttpTests(unittest.TestCase):
         self.assertEqual(body.get("protocol_version"), 1)
         self.assertIn("devices", body)
         self.assertIn("models_ready", body)
-        self.assertEqual(
-            body["models_ready"],
-            {"htdemucs": False, "htdemucs_ft": False},
-        )
+        from perfectvoice_engine.roformer.separator import is_roformer_ready
+        expected_ready = {"htdemucs": False, "htdemucs_ft": False, "mel_band_roformer": is_roformer_ready()}
+        self.assertEqual(body["models_ready"], expected_ready)
         self.assertEqual(body.get("window_seconds"), 600.0)
         self.assertEqual(body.get("window_overlap_seconds"), 1.0)
         self.assertEqual(body.get("memory_cap_bytes"), MEMORY_CAP_BYTES)

@@ -114,6 +114,7 @@ def extract_target_speaker(
     frame_centers = []
     frame_gains = []
     total_frames = len(starts)
+    last_log_milestone = -1
 
     for idx, start in enumerate(starts):
         raise_if_cancelled(cancel_event)
@@ -127,34 +128,46 @@ def extract_target_speaker(
         if rms < 1e-4:
             # Silence / ambient noise floor
             frame_gains.append(min_gain)
-            continue
-
-        # Extract frame voiceprint
-        frame_embed = extract_embedding(chunk[np.newaxis, :], sample_rate=sample_rate, device=device)
-        norm_f = np.linalg.norm(frame_embed)
-        if norm_f > 1e-6:
-            frame_embed = frame_embed / norm_f
-            cos_sim = float(np.dot(frame_embed, target_vec))
         else:
-            cos_sim = 0.0
+            # Extract frame voiceprint
+            frame_embed = extract_embedding(chunk[np.newaxis, :], sample_rate=sample_rate, device=device)
+            norm_f = np.linalg.norm(frame_embed)
+            if norm_f > 1e-6:
+                frame_embed = frame_embed / norm_f
+                cos_sim = float(np.dot(frame_embed, target_vec))
+            else:
+                cos_sim = 0.0
 
-        # Map cosine similarity to confidence [0.0, 1.0]
-        if cos_sim <= sim_threshold_low:
-            conf = 0.0
-        elif cos_sim >= sim_threshold_high:
-            conf = 1.0
-        else:
-            conf = (cos_sim - sim_threshold_low) / (sim_threshold_high - sim_threshold_low)
+            # Map cosine similarity to confidence [0.0, 1.0]
+            if cos_sim <= sim_threshold_low:
+                conf = 0.0
+            elif cos_sim >= sim_threshold_high:
+                conf = 1.0
+            else:
+                conf = (cos_sim - sim_threshold_low) / (sim_threshold_high - sim_threshold_low)
 
-        # Calculate target gain
-        gain = min_gain + (1.0 - min_gain) * (conf ** 1.5)
-        frame_gains.append(gain)
+            # Calculate target gain
+            gain = min_gain + (1.0 - min_gain) * (conf ** 1.5)
+            frame_gains.append(gain)
 
-        if on_progress is not None and (idx % 2 == 0 or idx == total_frames - 1):
+        pct_int = int(((idx + 1) / total_frames) * 100)
+        msg = None
+        if pct_int % 10 == 0 and pct_int != last_log_milestone:
+            msg = f"Isolating target speaker voice ({pct_int}%)..."
+            last_log_milestone = pct_int
+        elif idx == total_frames - 1 and last_log_milestone < 100:
+            msg = "Isolating target speaker voice (100%)..."
+            last_log_milestone = 100
+
+        if on_progress is not None and (idx % 2 == 0 or idx == total_frames - 1 or msg is not None):
             chunk_pct = round(((idx + 1) / total_frames) * 100, 1)
             dur_s = round(float(total_samples) / float(sample_rate), 2)
             pos_s = round(float(end) / float(sample_rate), 2)
-            on_progress({
+            payload = {
+                "stage_name": "Pass 2/2: Target Speaker Filter (-60dB)",
+                "overall_pct": round(50.0 + (chunk_pct * 0.5), 1),
+                "current_pass": 2,
+                "total_passes": 2,
                 "chunk_idx": idx + 1,
                 "total_chunks": total_frames,
                 "chunk_pct": chunk_pct,
@@ -162,8 +175,10 @@ def extract_target_speaker(
                 "audio_length": total_samples,
                 "audio_dur_s": dur_s,
                 "current_pos_s": pos_s,
-                "message": f"Isolating target speaker voice ({chunk_pct}%)…",
-            })
+            }
+            if msg is not None:
+                payload["message"] = msg
+            on_progress(payload)
 
     if not frame_centers:
         return audio_np

@@ -213,8 +213,10 @@ function clipToManifest(clip, inspect, options) {
 
 function resolveModel(options) {
     const opts = options || {};
+    if (opts.model === "mel_band_roformer" || opts.preset === "studio") return "mel_band_roformer";
     if (opts.model === "htdemucs_ft" || opts.preset === "quality") return "htdemucs_ft";
-    return "htdemucs";
+    if (opts.model === "htdemucs" || opts.preset === "fast") return "htdemucs";
+    return opts.model || "htdemucs";
 }
 
 function resolveEnhancer(options) {
@@ -237,7 +239,7 @@ function validInteger(val, min, max, fallback) {
 
 function buildParams(outputDir, roots, options) {
     const opts = options || {};
-    const isTse = opts.mode === "tse";
+    const isIsolated = opts.mode === "tse" || opts.mode === "audiosep";
     const params = {
         schema: "perfectvoice.params.v1",
         model: resolveModel(opts),
@@ -246,7 +248,7 @@ function buildParams(outputDir, roots, options) {
         overlap: validNumber(opts.overlap, 0, 0.99, DEFAULT_OVERLAP),
         shifts: validInteger(opts.shifts, 1, 16, DEFAULT_SHIFTS),
         vocals_only_bag: false,
-        wet: isTse ? 1.0 : validNumber(opts.wet, 0, 1, DEFAULT_WET),
+        wet: isIsolated ? 1.0 : validNumber(opts.wet, 0, 1, DEFAULT_WET),
         output_gain_db: opts.outputGainDb != null ? Number(opts.outputGainDb) : 0,
         mono: Boolean(opts.mono),
         sample_format: opts.sampleFormat || "pcm24",
@@ -258,6 +260,7 @@ function buildParams(outputDir, roots, options) {
         use_cache: opts.useCache !== false,
     };
     if (opts.mode) params.mode = opts.mode;
+    if (opts.text_query) params.text_query = String(opts.text_query);
     if (opts.speaker_id) params.speaker_id = opts.speaker_id;
     if (opts.ref_sample_t0 != null) params.ref_sample_t0 = Number(opts.ref_sample_t0);
     if (opts.ref_sample_t1 != null) params.ref_sample_t1 = Number(opts.ref_sample_t1);
@@ -296,6 +299,37 @@ function buildCreateJobRequest(inspect, options) {
         );
     }
     const roots = allowedRootsFor(sources, outputDir);
+
+    // Compute playhead sampling window for target speaker voiceprint
+    if (opts.ref_sample_t0 == null && inspect && inspect.currentTimecode && origins[0]) {
+        try {
+            const firstClip = origins[0];
+            const fpsFrac = (inspect && inspect.outFps) || { num: 24, den: 1 };
+            const fps = fpsFrac.num / fpsFrac.den;
+            const parseTc = (tc) => {
+                if (!tc || typeof tc !== "string") return null;
+                const p = tc.trim().split(/[:;]/).map(Number);
+                if (p.length !== 4 || p.some((n) => !Number.isFinite(n))) return null;
+                return Math.round(((p[0] * 3600) + (p[1] * 60) + p[2]) * fps) + p[3];
+            };
+            const curF = parseTc(inspect.currentTimecode);
+            const startF = parseTc(inspect.startTimecode) || 0;
+            if (curF != null) {
+                const relFrame = curF - startF;
+                const clipStart = Number(firstClip.recordFrame) || 0;
+                const durF = Number(firstClip.durationFrames) || 0;
+                let relS = 0;
+                if (relFrame >= clipStart && (durF <= 0 || relFrame <= clipStart + durF)) {
+                    relS = Math.max(0, (relFrame - clipStart) / fps);
+                }
+                opts.ref_sample_t0 = relS;
+                opts.ref_sample_t1 = relS + 2.5;
+            }
+        } catch {
+            // fallback to default start
+        }
+    }
+
     const params = buildParams(outputDir, roots, opts);
     return {
         ok: true,

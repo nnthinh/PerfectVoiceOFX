@@ -5,6 +5,7 @@ Jobs never fetch weights. Missing local repo → ``Model not installed``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -238,11 +239,14 @@ def process_clip(
     raise_if_cancelled(cancel_event)
     repo = Path(local_repo) if local_repo is not None else default_local_repo()
     name = job_model_name(params)
-    digest = (
-        weights_digest
-        if weights_digest is not None
-        else weights_sha256(files_for(name))
-    )
+    if name == "mel_band_roformer":
+        digest = hashlib.sha256(b"mel_band_roformer_kimberley_jensen_v1").hexdigest()
+    else:
+        digest = (
+            weights_digest
+            if weights_digest is not None
+            else weights_sha256(files_for(name))
+        )
     source = Path(str(clip["source_path"]))
     file_id = file_id_from_path(source)
     input_hash = clip_input_hash(clip, params, file_id=file_id, weights_digest=digest)
@@ -271,7 +275,12 @@ def process_clip(
         )
 
     if not model_checked:
-        require_model(name, repo)
+        if name == "mel_band_roformer":
+            from perfectvoice_engine.roformer.separator import is_roformer_ready
+            if not is_roformer_ready():
+                raise ModelNotInstalled("mel_band_roformer", "weights not found in Application Support")
+        else:
+            require_model(name, repo)
     _require_enhancer(params)
 
     raise_if_cancelled(cancel_event)
@@ -312,57 +321,83 @@ def process_clip(
         model_frames = to_model_rate(frames, extracted.sample_rate)
         wav_ct = np.ascontiguousarray(model_frames.T, dtype=np.float32)
         raise_if_cancelled(cancel_event)
-        # Progress forwarders for 2-stage execution
-        def _demucs_progress(ev: dict[str, Any]) -> None:
-            if on_progress is None:
-                return
-            pct = float(ev.get("overall_pct", 0.0))
-            scaled_overall = round(pct * 0.5, 1)
-            fwd = dict(ev)
-            fwd["current_pass"] = 1
-            fwd["total_passes"] = 2
-            fwd["overall_pct"] = scaled_overall
-            fwd["stage_name"] = "Pass 1/2: Music & Beat Separation (Demucs)"
-            on_progress({"event": "progress", **fwd})
-
-        def _tse_progress(ev: dict[str, Any]) -> None:
-            if on_progress is None:
-                return
-            chunk_pct = float(ev.get("chunk_pct", 0.0))
-            scaled_overall = round(50.0 + (chunk_pct * 0.5), 1)
-            fwd = dict(ev)
-            fwd["current_pass"] = 2
-            fwd["total_passes"] = 2
-            fwd["overall_pct"] = scaled_overall
-            fwd["stage_name"] = "Pass 2/2: Target Speaker Filter (-60dB)"
-            on_progress({"event": "progress", **fwd})
-
-        # 1. Demucs Vocal Separation (Removes background music, drums, bass, instruments)
-        separated = separate_vocals(
-            SeparateRequest(
-                wav_44100_stereo=wav_ct,
-                model=str(params["model"]),
-                device=str(params["device"]),
-                segment=float(params["segment"]),
-                overlap=float(params["overlap"]),
-                shifts=int(params["shifts"]),
-                vocals_only_bag=bool(params["vocals_only_bag"]),
-                cancel_event=cancel_event,
-                on_progress=_demucs_progress if on_progress is not None else None,
-            ),
-            repo,
-        )
-        vocals = np.ascontiguousarray(separated.vocals.T, dtype=np.float32)
-        raise_if_cancelled(cancel_event)
-
-        # 2. Target Speaker Extraction (Isolates target speaker from background sung lyrics)
         mode = str(params.get("mode") or "music")
         speaker_id = str(params.get("speaker_id") or "")
         ref_t0 = params.get("ref_sample_t0")
         ref_t1 = params.get("ref_sample_t1")
 
+        # Stage 1: Music & Beat Separation (Mel-Band RoFormer Studio SOTA or Demucs)
+        if str(params.get("model") or "") == "mel_band_roformer":
+            from perfectvoice_engine.roformer.separator import separate_roformer
+
+            def _roformer_progress(ev: dict[str, Any]) -> None:
+                if on_progress is None:
+                    return
+                pct = float(ev.get("overall_pct", 0.0))
+                scaled_overall = round(pct * (0.5 if mode == "tse" else 1.0), 1)
+                fwd = dict(ev)
+                fwd["current_pass"] = 1
+                fwd["total_passes"] = 2 if mode == "tse" else 1
+                fwd["overall_pct"] = scaled_overall
+                fwd["stage_name"] = "Pass 1/2: Studio Separation (Mel-Band RoFormer)"
+                on_progress({"event": "progress", **fwd})
+
+            out_sep = separate_roformer(
+                wav_ct,
+                sample_rate=MODEL_SAMPLE_RATE,
+                device=str(params.get("device") or "auto"),
+                cancel_event=cancel_event,
+                on_progress=_roformer_progress if on_progress is not None else None,
+            )
+            vocals = np.ascontiguousarray(out_sep.T, dtype=np.float32)
+        else:
+            # Demucs progress forwarder
+            def _demucs_progress(ev: dict[str, Any]) -> None:
+                if on_progress is None:
+                    return
+                pct = float(ev.get("overall_pct", 0.0))
+                scaled_overall = round(pct * (0.5 if mode == "tse" else 1.0), 1)
+                fwd = dict(ev)
+                fwd["current_pass"] = 1
+                fwd["total_passes"] = 2 if mode == "tse" else 1
+                fwd["overall_pct"] = scaled_overall
+                fwd["stage_name"] = "Pass 1/2: Music & Beat Separation (Demucs)"
+                on_progress({"event": "progress", **fwd})
+
+            separated = separate_vocals(
+                SeparateRequest(
+                    wav_44100_stereo=wav_ct,
+                    model=str(params["model"]),
+                    device=str(params["device"]),
+                    segment=float(params["segment"]),
+                    overlap=float(params["overlap"]),
+                    shifts=int(params["shifts"]),
+                    vocals_only_bag=bool(params["vocals_only_bag"]),
+                    cancel_event=cancel_event,
+                    on_progress=_demucs_progress if on_progress is not None else None,
+                ),
+                repo,
+            )
+            vocals = np.ascontiguousarray(separated.vocals.T, dtype=np.float32)
+
+        raise_if_cancelled(cancel_event)
+
+        # Stage 2: Target Speaker Extraction (Isolates target speaker from background sung lyrics)
         if mode == "tse":
             from perfectvoice_engine.tse import SpeakerStore, extract_embedding, extract_target_speaker
+
+            def _tse_progress(ev: dict[str, Any]) -> None:
+                if on_progress is None:
+                    return
+                chunk_pct = float(ev.get("chunk_pct", 0.0))
+                scaled_overall = round(50.0 + (chunk_pct * 0.5), 1)
+                fwd = dict(ev)
+                fwd["current_pass"] = 2
+                fwd["total_passes"] = 2
+                fwd["overall_pct"] = scaled_overall
+                fwd["stage_name"] = "Pass 2/2: Target Speaker Filter (-60dB)"
+                on_progress({"event": "progress", **fwd})
+
             embedding = None
             if speaker_id:
                 store = SpeakerStore()
@@ -455,7 +490,10 @@ def run_job(
     raise_if_cancelled(cancel_event)
     repo = Path(local_repo) if local_repo is not None else default_local_repo()
     name = job_model_name(params)
-    digest = weights_sha256(files_for(name))
+    if name == "mel_band_roformer":
+        digest = hashlib.sha256(b"mel_band_roformer_kimberley_jensen_v1").hexdigest()
+    else:
+        digest = weights_sha256(files_for(name))
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     own_index = cache_index is None and bool(params.get("use_cache", True))

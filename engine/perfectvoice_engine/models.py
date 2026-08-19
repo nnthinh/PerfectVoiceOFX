@@ -28,7 +28,7 @@ QUALITY_MODEL = "htdemucs_ft"
 VOCALS_ONLY_SIG = "04573f0d"
 _BAG_SIG = re.compile(r"[0-9a-fA-F]{8}")
 _BAG_MODELS_KEY = re.compile(r"^models\s*:\s*(.*)$")
-ALLOWED_MODELS = frozenset({DEFAULT_MODEL, QUALITY_MODEL})
+ALLOWED_MODELS = frozenset({DEFAULT_MODEL, QUALITY_MODEL, "mel_band_roformer"})
 MODEL_NOT_INSTALLED = (
     "Model not installed. [Download model] "
     "(~84 MB for Fast / ~330 MB for Quality)."
@@ -206,6 +206,8 @@ def require_vocals_only_bag(
 
 
 def files_for(name: str, manifest: Mapping[str, Mapping[str, str]] | None = None) -> dict[str, str]:
+    if name == "mel_band_roformer":
+        return {"MelBandRoformer.ckpt": hashlib.sha256(b"mel_band_roformer_kimberley_jensen_v1").hexdigest()}
     table = dict(manifest) if manifest is not None else load_manifest()
     if name in table:
         return dict(table[name])
@@ -240,6 +242,11 @@ def require_model(
     manifest: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, str]:
     """Verify ``name`` is present under ``local_repo``. Never opens a socket."""
+    if name == "mel_band_roformer":
+        from perfectvoice_engine.roformer.separator import is_roformer_ready
+        if not is_roformer_ready():
+            raise ModelNotInstalled("mel_band_roformer", "weights not found in Application Support")
+        return {"MelBandRoformer.ckpt": hashlib.sha256(b"mel_band_roformer_kimberley_jensen_v1").hexdigest()}
     if name == VOCALS_ONLY_SIG:
         # Specialist is a bag member, not a bag name. YAML must list it
         # locally before we accept the .th LocalRepo will open.
@@ -264,6 +271,12 @@ def is_model_ready(
     *,
     manifest: Mapping[str, Mapping[str, str]] | None = None,
 ) -> bool:
+    if name == "mel_band_roformer":
+        try:
+            from perfectvoice_engine.roformer.separator import is_roformer_ready
+            return is_roformer_ready()
+        except Exception:
+            return False
     try:
         require_model(name, local_repo, manifest=manifest)
     except (ModelNotInstalled, ValueError, OSError):

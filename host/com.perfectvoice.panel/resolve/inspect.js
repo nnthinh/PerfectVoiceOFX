@@ -350,6 +350,13 @@ function inspectSelection(resolve, options) {
         warnings.push("No clips selected. Select a clip on the Edit or Fairlight page.");
     }
 
+    let currentTc = null;
+    let startTc = null;
+    try {
+        currentTc = isCallable(timeline, "GetCurrentTimecode") ? callValue(timeline, "GetCurrentTimecode") : null;
+        startTc = isCallable(timeline, "GetStartTimecode") ? callValue(timeline, "GetStartTimecode") : null;
+    } catch {}
+
     const srInfo = liveProjectSampleRate(project);
     const payload = {
         ok: true,
@@ -358,6 +365,8 @@ function inspectSelection(resolve, options) {
         product: product || null,
         versionString: versionString || null,
         timelineName: callValue(timeline, "GetName") || null,
+        currentTimecode: currentTc,
+        startTimecode: startTc,
         outFps: { num: fpsInfo.fps.num, den: fpsInfo.fps.den },
         outFpsSource: fpsInfo.source,
         projectSampleRate: srInfo.sampleRate,

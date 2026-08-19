@@ -48,6 +48,7 @@ from perfectvoice_engine.models import (
     VOCALS_ONLY_SIG,
     ModelNotInstalled,
     default_local_repo,
+    is_model_ready,
     models_ready,
     require_model,
 )
@@ -286,7 +287,13 @@ def utc_now() -> str:
 
 def _require_local_model(params: dict[str, Any]) -> None:
     """Numpy-free fail-closed check. Never fetches weights."""
-    name = VOCALS_ONLY_SIG if params.get("vocals_only_bag") else str(params["model"])
+    model_name = str(params.get("model") or "")
+    if model_name == "mel_band_roformer":
+        from perfectvoice_engine.roformer.separator import is_roformer_ready
+        if not is_roformer_ready():
+            raise RuntimeError("Mel-Band RoFormer model not installed. Ensure weights are present.")
+        return
+    name = VOCALS_ONLY_SIG if params.get("vocals_only_bag") else model_name
     require_model(name, default_local_repo())
 
 
@@ -590,23 +597,27 @@ class EngineHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/v1/health":
+            ready = models_ready(self.server.local_repo)
+            ready["mel_band_roformer"] = is_model_ready("mel_band_roformer", self.server.local_repo)
             self._json(
                 200,
                 {
                     "ok": True,
                     "status": "ok",
                     "protocol_version": PROTOCOL_VERSION,
-                    "models_ready": models_ready(self.server.local_repo),
+                    "models_ready": ready,
                 },
             )
             return
         if path == "/v1/capabilities":
+            ready = models_ready(self.server.local_repo)
+            ready["mel_band_roformer"] = is_model_ready("mel_band_roformer", self.server.local_repo)
             self._json(
                 200,
                 {
                     "protocol_version": PROTOCOL_VERSION,
                     "devices": ["cpu"],
-                    "models_ready": models_ready(self.server.local_repo),
+                    "models_ready": ready,
                     "window_seconds": WINDOW_SECONDS,
                     "window_overlap_seconds": WINDOW_OVERLAP_SECONDS,
                     "memory_cap_bytes": MEMORY_CAP_BYTES,

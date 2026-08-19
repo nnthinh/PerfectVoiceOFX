@@ -349,8 +349,8 @@ function loadWindowState() {
             const w = Number(ws.width);
             const h = Number(ws.height);
             return {
-                width: Number.isFinite(w) && w >= 400 ? w : 680,
-                height: Number.isFinite(h) && h >= 500 ? h : 1020,
+                width: Number.isFinite(w) && w >= 400 ? w : 620,
+                height: Number.isFinite(h) && h >= 380 ? h : 480,
                 x: Number.isFinite(Number(ws.x)) ? Number(ws.x) : undefined,
                 y: Number.isFinite(Number(ws.y)) ? Number(ws.y) : undefined,
             };
@@ -358,7 +358,7 @@ function loadWindowState() {
     } catch {
         // ignore
     }
-    return { width: 680, height: 1020 };
+    return { width: 620, height: 480 };
 }
 
 function saveWindowState(win) {
@@ -386,10 +386,10 @@ function saveWindowState(win) {
 function createWindow() {
     const ws = loadWindowState();
     const options = {
-        width: ws.width || 680,
-        height: ws.height || 1020,
-        minWidth: 540,
-        minHeight: 650,
+        width: ws.width || 620,
+        height: ws.height || 480,
+        minWidth: 460,
+        minHeight: 400,
         useContentSize: true,
         webPreferences: {
             preload: path.join(__dirname, "preload.js"),
@@ -428,7 +428,6 @@ function createWindow() {
     mainWindow.on("move", debouncedSave);
     mainWindow.on("close", () => {
         saveWindowState(mainWindow);
-        app.quit();
     });
     mainWindow.loadFile("index.html");
 }
@@ -438,10 +437,9 @@ let shuttingDown = false;
 function shutdown() {
     if (shuttingDown) return;
     shuttingDown = true;
-    stopEngine().catch(() => {});
-    if (WorkflowIntegration && typeof WorkflowIntegration.CleanUp === "function") {
-        WorkflowIntegration.CleanUp();
-    }
+    try {
+        stopEngine().catch(() => {});
+    } catch {}
 }
 
 app.whenReady().then(() => {
@@ -452,7 +450,7 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
     shutdown();
-    if (process.platform !== "darwin") app.quit();
+    app.quit();
 });
 
 app.on("will-quit", () => {

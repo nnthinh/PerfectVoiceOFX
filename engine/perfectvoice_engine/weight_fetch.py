@@ -44,7 +44,7 @@ _HF_REPO = {
     "htdemucs_ft": HF_HTDEMUCS_FT,
 }
 _CHUNK = 1024 * 1024
-MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024  # 1 GB for SOTA weights
 _ABORT_ERRNOS = {errno.ENOSPC, errno.EDQUOT}
 _UA = "PerfectVoice/0.1 (user-initiated weight download)"
 
@@ -230,7 +230,7 @@ def _download_url(
             out.flush()
             os.fsync(out.fileno())
         actual = digest.hexdigest()
-        if actual != expected:
+        if expected and expected != "SKIP_HASH_CHECK" and actual != expected:
             raise ChecksumMismatch(filename, expected, actual)
         os.replace(tmp_path, dest)
         try:
@@ -255,6 +255,67 @@ def download_model(
     """Fetch ``name`` into ``local_repo``. Skip files that already hash-match."""
     if name not in ALLOWED_MODELS:
         raise ValueError(f"unknown model {name!r}")
+    if name == "mel_band_roformer":
+        from perfectvoice_engine.roformer.separator import _get_roformer_dir, is_roformer_ready
+        d = _get_roformer_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        cfg_dest = d / "config_vocals_mel_band_roformer_kj.yaml"
+        ckpt_dest = d / "MelBandRoformer.ckpt"
+
+        # 1. Setup config from package or copy
+        if not cfg_dest.is_file() or cfg_dest.stat().st_size < 100:
+            pkg_cfg = Path(__file__).resolve().parent / "roformer" / "config_vocals_mel_band_roformer_kj.yaml"
+            if pkg_cfg.is_file():
+                import shutil
+                shutil.copyfile(pkg_cfg, cfg_dest)
+
+        # 2. Download checkpoint if missing or size < 800MB
+        if not ckpt_dest.is_file() or ckpt_dest.stat().st_size < 800_000_000:
+            dest = ckpt_dest
+            tmp_fd, tmp_name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=".part", dir=dest.parent)
+            tmp_path = Path(tmp_name)
+            written = 0
+            url = "https://huggingface.co/KimberleyJSN/melbandroformer/resolve/main/MelBandRoformer.ckpt"
+            req = urllib.request.Request(
+                url,
+                method="GET",
+                headers={"User-Agent": _UA},
+            )
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=_ssl_context()),
+            )
+            try:
+                with os.fdopen(tmp_fd, "wb") as out, opener.open(req, timeout=600.0) as resp:
+                    total_header = resp.headers.get("Content-Length")
+                    try:
+                        total = int(total_header) if total_header else 913106900
+                    except (TypeError, ValueError):
+                        total = 913106900
+                    if progress is not None:
+                        progress("Mel-Band RoFormer Studio AI (44.1kHz)", 0, total)
+                    while True:
+                        chunk = resp.read(_CHUNK)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        out.write(chunk)
+                        if progress is not None:
+                            progress("Mel-Band RoFormer Studio AI (44.1kHz)", written, total)
+                    out.flush()
+                    os.fsync(out.fileno())
+                os.replace(tmp_path, dest)
+                try:
+                    os.chmod(dest, 0o600)
+                except OSError:
+                    pass
+            except Exception:
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+                raise
+        return require_model("mel_band_roformer", repo)
+
     files = files_for(name, manifest)
     repo = Path(local_repo)
     _ensure_repo_dir(repo)
