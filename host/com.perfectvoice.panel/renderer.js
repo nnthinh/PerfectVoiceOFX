@@ -1,45 +1,191 @@
 window.addEventListener("DOMContentLoaded", async () => {
     const statusEl = document.getElementById("status");
     const pathEl = document.getElementById("enginePath");
-    const healthEl = document.getElementById("health");
     const errorEl = document.getElementById("error");
     const resolveEl = document.getElementById("resolveNote");
-    const startBtn = document.getElementById("startBtn");
-    const inspectBtn = document.getElementById("inspectBtn");
-    const placeBtn = document.getElementById("placeBtn");
     const removeBtn = document.getElementById("removeBtn");
     const cancelBtn = document.getElementById("cancelBtn");
-    const downloadBtn = document.getElementById("downloadBtn");
-    const dfnCheck = document.getElementById("dfnCheck");
     const muteCheck = document.getElementById("muteCheck");
     const cacheCheck = document.getElementById("cacheCheck");
     const modelSelect = document.getElementById("modelSelect");
-    const jobProgress = document.getElementById("jobProgress");
+    const wetInput = document.getElementById("wetInput");
+    const wetVal = document.getElementById("wetVal");
+    const shiftsSelect = document.getElementById("shiftsSelect");
+    const overlapSelect = document.getElementById("overlapSelect");
+    const overallBar = document.getElementById("overallBar");
+    const overallPctText = document.getElementById("overallPctText");
+    const currentBar = document.getElementById("currentBar");
+    const currentPassTitle = document.getElementById("currentPassTitle");
+    const currentPassPctText = document.getElementById("currentPassPctText");
+    const statElapsed = document.getElementById("statElapsed");
+    const statEta = document.getElementById("statEta");
+    const statSpeed = document.getElementById("statSpeed");
+    const statPasses = document.getElementById("statPasses");
+    const jobBadge = document.getElementById("jobBadge");
+    const jobLog = document.getElementById("jobLog");
     const jobError = document.getElementById("jobError");
-    const clipList = document.getElementById("clipList");
-    const inspectMeta = document.getElementById("inspectMeta");
-    const inspectError = document.getElementById("inspectError");
     const dlWrap = document.getElementById("dlWrap");
     const dlLabel = document.getElementById("dlLabel");
     const dlBar = document.getElementById("dlBar");
     const dlLog = document.getElementById("dlLog");
+    const telemetryWrap = document.getElementById("telemetryWrap");
+    const telCompute = document.getElementById("telCompute");
+    const telRam = document.getElementById("telRam");
+    const telCpu = document.getElementById("telCpu");
+    const telTime = document.getElementById("telTime");
 
     let lastStatus = null;
     let lastInspect = null;
     let jobRunning = false;
     let downloading = false;
     let cancelTimer = null;
+    let jobStartTime = null;
+    let jobTimerInterval = null;
+    let logEntries = [];
+
+    let lastOverallPct = 0;
+    let lastAudioDurS = 0;
+    let lastShiftIdx = 0;
+    let lastSpeed = 0;
+
+    function formatTime() {
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    function formatSecs(sec) {
+        if (!Number.isFinite(sec) || sec < 0) return "00:00";
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
+    function setBadge(state, text) {
+        if (!jobBadge) return;
+        jobBadge.className = `job-badge ${state}`;
+        jobBadge.textContent = String(text).toUpperCase();
+    }
+
+    function appendLog(line) {
+        if (!jobLog || !line) return;
+        const formatted = `[${formatTime()}] ${line}`;
+        logEntries.push(formatted);
+        if (logEntries.length > 80) logEntries.shift();
+        jobLog.textContent = logEntries.join("\n");
+        jobLog.scrollTop = jobLog.scrollHeight;
+    }
+
+    function clearLog(initialLine) {
+        logEntries = [];
+        if (initialLine) {
+            appendLog(initialLine);
+        } else if (jobLog) {
+            jobLog.textContent = "";
+        }
+    }
+
+    function updateWetLabel(val) {
+        if (!wetVal) return;
+        const v = Number(val);
+        if (!Number.isFinite(v)) return;
+        const pct = Math.round(v * 100);
+        wetVal.textContent = `${v.toFixed(2)} (${pct}%)`;
+    }
+
+    function startJobTelemetry() {
+        if (telemetryWrap) telemetryWrap.hidden = false;
+        jobStartTime = Date.now();
+        lastOverallPct = 0;
+        lastAudioDurS = 0;
+        lastShiftIdx = 0;
+        lastSpeed = 0;
+
+        if (telCompute) telCompute.textContent = "Apple Metal (MPS)";
+        if (telRam) telRam.textContent = "Measuring…";
+        if (telCpu) telCpu.textContent = "Active";
+        if (telTime) telTime.textContent = "0.0s";
+
+        if (statElapsed) statElapsed.textContent = "00:00";
+        if (statEta) statEta.textContent = "Estimating…";
+        if (statSpeed) statSpeed.textContent = "—";
+        if (statPasses) statPasses.textContent = "Calculating…";
+        if (overallBar) overallBar.style.width = "0%";
+        if (currentBar) currentBar.style.width = "0%";
+        if (overallPctText) overallPctText.textContent = "0%";
+        if (currentPassPctText) currentPassPctText.textContent = "—";
+
+        if (jobTimerInterval) clearInterval(jobTimerInterval);
+        jobTimerInterval = setInterval(() => {
+            if (!jobStartTime) return;
+            const E = (Date.now() - jobStartTime) / 1000;
+            if (telTime) telTime.textContent = `${E.toFixed(1)}s`;
+            if (statElapsed) statElapsed.textContent = formatSecs(E);
+
+            if (lastOverallPct > 0 && E >= 1.0) {
+                const f = lastOverallPct / 100;
+                const eta = Math.max(0, (E / f) - E);
+                if (statEta) statEta.textContent = `~${formatSecs(eta)}`;
+                if (lastAudioDurS > 0) {
+                    lastSpeed = (lastAudioDurS * f) / E;
+                    if (statSpeed) statSpeed.textContent = `${lastSpeed.toFixed(1)}× RT`;
+                }
+            }
+        }, 200);
+    }
+
+    function stopJobTelemetry(success, isCached) {
+        if (jobTimerInterval) {
+            clearInterval(jobTimerInterval);
+            jobTimerInterval = null;
+        }
+        if (jobStartTime) {
+            const E = (Date.now() - jobStartTime) / 1000;
+            if (telTime) telTime.textContent = isCached ? `${E.toFixed(1)}s (Cache)` : `${E.toFixed(1)}s`;
+            if (statElapsed) statElapsed.textContent = formatSecs(E);
+            if (statEta) statEta.textContent = "00:00 (Done)";
+            if (statSpeed) {
+                statSpeed.textContent = isCached
+                    ? "Instant (Cache)"
+                    : lastSpeed > 0
+                        ? `${lastSpeed.toFixed(1)}× RT`
+                        : "Done";
+            }
+        }
+        if (telCpu) {
+            telCpu.textContent = success ? "Idle" : "—";
+        }
+    }
+
+    function updateTelemetry(data) {
+        if (!telemetryWrap) return;
+        if (!data) return;
+        telemetryWrap.hidden = false;
+        if (data.device && telCompute) {
+            const dev = String(data.device).toLowerCase();
+            if (dev === "mps") {
+                telCompute.textContent = "Apple Metal (MPS)";
+            } else if (dev === "cuda") {
+                telCompute.textContent = "NVIDIA CUDA (GPU)";
+            } else {
+                telCompute.textContent = "CPU (Float32)";
+            }
+        }
+        if (data.memory_mb != null && Number(data.memory_mb) > 0 && telRam) {
+            const mb = Number(data.memory_mb);
+            telRam.textContent = mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
+        }
+        if (data.cpu_percent != null && Number(data.cpu_percent) >= 0 && telCpu) {
+            const cpu = Math.round(Number(data.cpu_percent));
+            telCpu.textContent = cpu > 0 ? `${cpu}%` : "Active";
+        }
+    }
 
     function paint(s) {
         const connected = !!(s && s.connected);
         statusEl.textContent = connected ? "Engine connected" : "Engine not connected";
         statusEl.className = connected ? "ok" : "off";
         pathEl.textContent = (s && s.enginePath) || "not found";
-        if (s && s.health) {
-            healthEl.textContent = JSON.stringify(s.health, null, 2);
-        } else if (!healthEl.textContent) {
-            healthEl.textContent = "—";
-        }
         if (s && s.resolveReady) {
             resolveEl.textContent = "";
         } else if (s && s.resolveError) {
@@ -62,47 +208,46 @@ window.addEventListener("DOMContentLoaded", async () => {
     function currentPrefs() {
         return {
             model: selectedModel(),
-            dfn: !!(dfnCheck && dfnCheck.checked),
+            dfn: false,
             muteOriginal: !!(muteCheck && muteCheck.checked),
             useCache: !(cacheCheck && !cacheCheck.checked),
+            wet: wetInput ? Number(wetInput.value) : 0.85,
+            shifts: shiftsSelect ? parseInt(shiftsSelect.value, 10) : 1,
+            overlap: overlapSelect ? Number(overlapSelect.value) : 0.25,
         };
     }
 
-    function applyPrefs(prefs) {
-        if (!prefs) return;
-        if (modelSelect && (prefs.model === "htdemucs" || prefs.model === "htdemucs_ft")) {
-            modelSelect.value = prefs.model;
+    function applyPrefs(p) {
+        if (!p) return;
+        if (p.model && modelSelect) modelSelect.value = p.model;
+        if (p.wet != null && wetInput) {
+            wetInput.value = String(p.wet);
+            updateWetLabel(p.wet);
         }
-        if (dfnCheck) dfnCheck.checked = prefs.dfn === true;
-        if (muteCheck) muteCheck.checked = prefs.muteOriginal === true;
-        if (cacheCheck) cacheCheck.checked = prefs.useCache !== false;
+        if (p.shifts != null && shiftsSelect) shiftsSelect.value = String(p.shifts);
+        if (p.overlap != null && overlapSelect) overlapSelect.value = String(p.overlap);
+        if (p.muteOriginal != null && muteCheck) muteCheck.checked = !!p.muteOriginal;
+        if (p.useCache != null && cacheCheck) cacheCheck.checked = !!p.useCache;
     }
 
     function persistPrefs() {
-        if (!window.perfectvoice.setUiPrefs) return;
-        window.perfectvoice.setUiPrefs(currentPrefs()).catch(() => {});
-    }
-
-    function modelReadyMap(s) {
-        if (!s) return null;
-        if (s.modelsReady && typeof s.modelsReady === "object") return s.modelsReady;
-        if (s.health && s.health.models_ready && typeof s.health.models_ready === "object") {
-            return s.health.models_ready;
+        if (window.perfectvoice.setUiPrefs) {
+            window.perfectvoice.setUiPrefs(currentPrefs()).catch(() => {});
         }
-        return null;
     }
 
-    function isModelReady(s, name) {
-        const ready = modelReadyMap(s);
-        return !!(ready && ready[name] === true);
+    function formatBytes(bytes) {
+        const n = Number(bytes);
+        if (!Number.isFinite(n) || n <= 0) return "0 B";
+        const units = ["B", "KB", "MB", "GB"];
+        const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+        const val = n / Math.pow(1024, i);
+        return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
     }
 
-    function formatBytes(n) {
-        const v = Number(n);
-        if (!Number.isFinite(v) || v < 0) return "—";
-        if (v < 1024) return `${Math.round(v)} B`;
-        if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
-        return `${(v / (1024 * 1024)).toFixed(1)} MB`;
+    function isModelReady(status, name) {
+        if (!status || !status.health || !status.health.models_ready) return false;
+        return !!status.health.models_ready[name];
     }
 
     function paintDownloadProgress(data) {
@@ -123,9 +268,9 @@ window.addEventListener("DOMContentLoaded", async () => {
                 ? `${file}\n${formatBytes(done)} / ${formatBytes(total)}`
                 : `${file}\n${formatBytes(done)}`;
         }
-        jobProgress.textContent = total > 0
-            ? `Downloading ${file}: ${pct}% (${formatBytes(done)} / ${formatBytes(total)})`
-            : `Downloading ${file}…`;
+        if (total > 0) {
+            appendLog(`Downloading ${file}: ${pct}% (${formatBytes(done)} / ${formatBytes(total)})`);
+        }
     }
 
     function hideDownloadProgress() {
@@ -136,105 +281,28 @@ window.addEventListener("DOMContentLoaded", async () => {
     function syncRunButtons() {
         const ready = isModelReady(lastStatus, selectedModel());
         const busy = jobRunning || downloading;
-        removeBtn.disabled = busy || !ready;
-        if (!jobRunning) {
+        if (removeBtn) removeBtn.disabled = busy || !ready;
+        if (!jobRunning && cancelBtn) {
             cancelBtn.disabled = true;
         }
-        startBtn.disabled = busy;
-        inspectBtn.disabled = busy;
-        placeBtn.disabled = busy || !ready;
-        downloadBtn.disabled = busy || ready;
         if (modelSelect) modelSelect.disabled = busy;
+        if (wetInput) wetInput.disabled = busy;
+        if (shiftsSelect) shiftsSelect.disabled = busy;
+        if (overlapSelect) overlapSelect.disabled = busy;
+        if (muteCheck) muteCheck.disabled = busy;
+        if (cacheCheck) cacheCheck.disabled = busy;
         if (busy) return;
-        const current = jobProgress.textContent || "";
-        const isHint =
-            !current ||
-            current === "—" ||
-            /select a clip|starting engine|downloading |model ready/i.test(current);
-        if (!isHint) return;
         if (!engineHealthy(lastStatus)) {
-            jobProgress.textContent = "Starting engine…";
+            setBadge("idle", "Starting");
+            if (logEntries.length === 0 && jobLog) jobLog.textContent = "Starting engine…";
         } else if (!ready) {
-            jobProgress.textContent = "Model not ready. Downloading…";
+            setBadge("idle", "Downloading");
+            if (logEntries.length === 0 && jobLog) jobLog.textContent = "Model not ready. Downloading…";
         } else {
-            jobProgress.textContent = "Select a clip with audio, then click Clean voice.";
-        }
-    }
-
-    function fmtNum(n, digits) {
-        if (n == null || !Number.isFinite(Number(n))) return "—";
-        return Number(n).toFixed(digits);
-    }
-
-    function paintInspect(result) {
-        inspectError.textContent = "";
-        clipList.replaceChildren();
-        lastInspect = result && result.ok ? result : null;
-        syncRunButtons();
-        if (!result || !result.ok) {
-            inspectMeta.textContent = "";
-            inspectError.textContent = (result && result.error) || "Inspect failed.";
-            return;
-        }
-        const fps = result.outFps
-            ? `${result.outFps.num}/${result.outFps.den}`
-            : "—";
-        inspectMeta.textContent =
-            `Source: ${result.source || "—"}  ·  ${result.jobCount || 0} job(s), ` +
-            `${result.acceptedCount || 0} accepted, ${result.rejectedCount || 0} rejected  ·  fps ${fps}` +
-            (result.warnings && result.warnings.length ? `\n${result.warnings.join("\n")}` : "");
-
-        for (const clip of result.clips || []) {
-            const li = document.createElement("li");
-            const title = document.createElement("div");
-            title.className = "name";
-            const track =
-                clip.trackType != null
-                    ? `${clip.trackType} ${clip.trackIndex != null ? clip.trackIndex : ""}`.trim()
-                    : "";
-            title.textContent = `${clip.name || "(unnamed)"}  ${track}`;
-            li.appendChild(title);
-
-            const pathLine = document.createElement("div");
-            pathLine.className = "path";
-            pathLine.textContent = clip.filePath || "(no File Path)";
-            li.appendChild(pathLine);
-
-            const meta = document.createElement("div");
-            meta.className = "meta";
-            meta.textContent =
-                `t0=${fmtNum(clip.t0, 3)}  t1=${fmtNum(clip.t1, 3)}  ` +
-                `recordFrame=${clip.recordFrame != null ? clip.recordFrame : "—"}  ` +
-                `H_left=${fmtNum(clip.hLeftActual, 3)}`;
-            li.appendChild(meta);
-
-            if (clip.suppressedDuplicate) {
-                const dup = document.createElement("div");
-                dup.className = "dup";
-                dup.textContent = "Duplicate (same audio path — skipped)";
-                li.appendChild(dup);
-            } else if (clip.rejected) {
-                for (const reason of clip.reasons || []) {
-                    const line = document.createElement("div");
-                    line.className = "rej";
-                    line.textContent = `Rejected: ${reason.message}`;
-                    li.appendChild(line);
-                }
-            } else {
-                const ok = document.createElement("div");
-                ok.className = "okc";
-                ok.textContent = "Accepted";
-                li.appendChild(ok);
+            if (logEntries.length === 0 && jobLog) {
+                setBadge("idle", "Ready");
+                jobLog.textContent = "Ready. Select a clip with audio, then click Clean voice.";
             }
-
-            for (const warn of clip.warnings || []) {
-                const line = document.createElement("div");
-                line.className = "warn";
-                line.textContent = `Warning: ${warn.message}`;
-                li.appendChild(line);
-            }
-
-            clipList.appendChild(li);
         }
     }
 
@@ -248,6 +316,8 @@ window.addEventListener("DOMContentLoaded", async () => {
         }
         downloading = true;
         jobError.textContent = "";
+        setBadge("running", "Downloading");
+        appendLog(`Model ${selectedModel()} not found locally. Starting download…`);
         paintDownloadProgress({ filename: selectedModel(), bytes_done: 0, bytes_total: 0 });
         syncRunButtons();
         try {
@@ -259,12 +329,11 @@ window.addEventListener("DOMContentLoaded", async () => {
                     paint(await window.perfectvoice.startEngine());
                 }
                 if (isModelReady(lastStatus, selectedModel())) {
-                    jobProgress.textContent =
-                        "Model ready. Select a clip with audio, then click Clean voice.";
+                    setBadge("idle", "Ready");
+                    appendLog("Model downloaded and ready.");
                 } else {
-                    jobError.textContent =
-                        "Download finished but the engine still reports the model as missing.";
-                    jobProgress.textContent = "Model not ready.";
+                    setBadge("error", "Missing");
+                    jobError.textContent = "Download finished but engine still reports model as missing.";
                 }
             } else if (result && result.notImplemented) {
                 hideDownloadProgress();
@@ -301,93 +370,90 @@ window.addEventListener("DOMContentLoaded", async () => {
             ensureModelDownloaded();
         });
     }
-    for (const el of [dfnCheck, muteCheck, cacheCheck]) {
-        if (el) el.addEventListener("change", persistPrefs);
+    if (wetInput) {
+        wetInput.addEventListener("input", () => {
+            updateWetLabel(wetInput.value);
+        });
+        wetInput.addEventListener("change", persistPrefs);
     }
-
-    startBtn.addEventListener("click", async () => {
-        startBtn.disabled = true;
-        errorEl.textContent = "";
-        try {
-            paint(await window.perfectvoice.startEngine());
-        } catch (err) {
-            errorEl.textContent = String(err && err.message ? err.message : err);
-        } finally {
-            syncRunButtons();
-        }
-    });
-
-    inspectBtn.addEventListener("click", async () => {
-        inspectBtn.disabled = true;
-        inspectError.textContent = "";
-        try {
-            paintInspect(await window.perfectvoice.inspect());
-        } catch (err) {
-            inspectError.textContent = String(err && err.message ? err.message : err);
-        } finally {
-            syncRunButtons();
-        }
-    });
-
-    placeBtn.addEventListener("click", async () => {
-        placeBtn.disabled = true;
-        inspectError.textContent = "";
-        try {
-            const result = await window.perfectvoice.placeTestWav();
-            if (!result || !result.ok) {
-                inspectError.textContent = (result && result.error) || "Place test WAV failed.";
-                if (result && result.inspect) paintInspect(result.inspect);
-                return;
-            }
-            if (result.inspectSource || result.clipName) {
-                inspectMeta.textContent =
-                    `Placed test WAV for “${result.clipName || "clip"}”  ·  ` +
-                    `startFrame=${result.clipInfo && result.clipInfo.startFrame}  ` +
-                    `endFrame=${result.clipInfo && result.clipInfo.endFrame}  ` +
-                    `recordFrame=${result.recordFrame}  ·  track ${result.trackName} #${result.trackIndex}` +
-                    (result.generated ? "  ·  generated silence WAV" : "");
-            }
-            if (result.warnings && result.warnings.length) {
-                inspectError.textContent = result.warnings.join("\n");
-            }
-        } catch (err) {
-            inspectError.textContent = String(err && err.message ? err.message : err);
-        } finally {
-            syncRunButtons();
-        }
-    });
-
-    function formatJobEvent(ev) {
-        if (!ev) return "";
-        const data = ev.data || {};
-        if (ev.type === "queued") {
-            return `Queued job ${data.id || ev.jobId || ""}`.trim();
-        }
-        if (ev.type === "download") {
-            paintDownloadProgress(data);
-            return "";
-        }
-        if (ev.type === "progress") {
-            if (data.bytes_done != null || data.filename) {
-                paintDownloadProgress(data);
-                return "";
-            }
-            if (data.message) return data.message;
-            const len = Number(data.audio_length) || 0;
-            const off = Number(data.segment_offset) || 0;
-            const pct = len > 0 ? Math.min(100, Math.round((100 * off) / len)) : 0;
-            const clip = data.clip_id ? `clip ${data.clip_id.slice(0, 8)}…` : "clip";
-            return `Working… ${clip}  ${pct}%  (${off}/${len})`;
-        }
-        if (ev.type === "done") return `Job done (${data.id || ev.jobId || ""})`.trim();
-        if (ev.type === "error") return data.message || "Job error";
-        return ev.type || "";
+    if (shiftsSelect) {
+        shiftsSelect.addEventListener("change", persistPrefs);
+    }
+    if (overlapSelect) {
+        overlapSelect.addEventListener("change", persistPrefs);
+    }
+    for (const el of [muteCheck, cacheCheck]) {
+        if (el) el.addEventListener("change", persistPrefs);
     }
 
     if (window.perfectvoice.onJobEvent) {
         window.perfectvoice.onJobEvent((ev) => {
-            const line = formatJobEvent(ev);
-            if (line) jobProgress.textContent = line;
+            if (!ev) return;
+            const data = ev.data || {};
+            if (ev.type === "progress") {
+                if (data.bytes_done != null || data.filename) {
+                    paintDownloadProgress(data);
+                    return;
+                }
+                updateTelemetry(data);
+
+                if (data.overall_pct != null) lastOverallPct = Number(data.overall_pct);
+                if (data.audio_dur_s != null) lastAudioDurS = Number(data.audio_dur_s);
+
+                const currentPass = data.current_pass || 1;
+                const totalPasses = data.total_passes || 1;
+                const overallPct = data.overall_pct != null ? data.overall_pct : 0;
+                const chunkPct = data.chunk_pct != null ? data.chunk_pct : 0;
+                const chunkIdx = data.chunk_idx || 1;
+                const totalChunks = data.total_chunks || 1;
+                const shiftIdx = data.shift_idx || 1;
+                const totalShifts = data.total_shifts || 1;
+                const modelIdx = data.model_idx || 1;
+                const totalModels = data.total_models || 1;
+                const posS = data.current_pos_s != null ? data.current_pos_s : 0;
+                const durS = data.audio_dur_s != null ? data.audio_dur_s : 0;
+
+                // 1. Update Overall Progress Bar & Text
+                if (overallBar) overallBar.style.width = `${overallPct}%`;
+                if (overallPctText) {
+                    overallPctText.textContent = `${overallPct}% (${currentPass}/${totalPasses})`;
+                }
+                if (statPasses) {
+                    statPasses.textContent = totalModels > 1
+                        ? `${currentPass} / ${totalPasses} (${totalChunks}c × ${totalShifts}s × ${totalModels}m)`
+                        : `${currentPass} / ${totalPasses} (${totalChunks}c × ${totalShifts}s)`;
+                }
+
+                // 2. Update Current Pass Progress Bar & Text
+                if (currentBar) currentBar.style.width = `${chunkPct}%`;
+                if (currentPassTitle) {
+                    currentPassTitle.textContent = totalModels > 1
+                        ? `Model ${modelIdx}/${totalModels} · Shift ${shiftIdx}/${totalShifts} · Chunk ${chunkIdx}/${totalChunks}`
+                        : `Shift ${shiftIdx}/${totalShifts} · Chunk ${chunkIdx}/${totalChunks}`;
+                }
+                if (currentPassPctText) {
+                    currentPassPctText.textContent = durS > 0
+                        ? `${chunkPct}% (${posS}s / ${durS}s)`
+                        : `${chunkPct}%`;
+                }
+
+                // 3. Smart Terminal Logging (Throttled per shift/model & key milestones)
+                const shiftKey = `${modelIdx}_${shiftIdx}`;
+                if (shiftKey !== lastShiftIdx) {
+                    const modelPrefix = totalModels > 1 ? `Model ${modelIdx}/${totalModels} · ` : "";
+                    appendLog(`🔄 ${modelPrefix}Shift ${shiftIdx}/${totalShifts} started (${totalChunks} chunks · ~${durS}s audio)...`);
+                    lastShiftIdx = shiftKey;
+                }
+                if (
+                    chunkIdx === 1 ||
+                    chunkIdx === Math.round(totalChunks / 2) ||
+                    chunkIdx === totalChunks
+                ) {
+                    appendLog(
+                        `Pass ${currentPass}/${totalPasses} · Chunk ${chunkIdx}/${totalChunks} · ${chunkPct}%`
+                    );
+                }
+            }
         });
     }
     if (window.perfectvoice.onDownloadEvent) {
@@ -414,65 +480,87 @@ window.addEventListener("DOMContentLoaded", async () => {
     removeBtn.addEventListener("click", async () => {
         jobError.textContent = "";
         setJobRunning(true);
-        jobProgress.textContent = "Submitting job…";
+        startJobTelemetry();
+        setBadge("running", "Running");
+        clearLog("Starting Clean voice job…");
+        appendLog("Inspecting timeline selection…");
+        let success = false;
+        let isCached = false;
         try {
-            const result = await window.perfectvoice.removeAccompaniment({
-                model: selectedModel(),
-                dfn: !!(dfnCheck && dfnCheck.checked),
-                muteOriginal: !!(muteCheck && muteCheck.checked),
-                useCache: !(cacheCheck && !cacheCheck.checked),
-            });
-            if (result && result.inspect) paintInspect(result.inspect);
+            const prefs = currentPrefs();
+            const result = await window.perfectvoice.removeAccompaniment(prefs);
             if (!result || !result.ok) {
-                jobError.textContent = (result && result.error) || "Clean voice failed.";
+                setBadge("error", "Error");
+                if (overallBar) overallBar.style.width = "0%";
+                if (currentBar) currentBar.style.width = "0%";
+                if (statEta) statEta.textContent = "—";
+                const errText = (result && result.error) || "Clean voice failed.";
+                jobError.textContent = errText;
                 if (result && result.cancelled) {
-                    jobProgress.textContent = "Cancelled. Timeline was not changed.";
+                    appendLog("Job cancelled. Timeline was not changed.");
                 } else if (result && result.error && /Model not installed/i.test(result.error)) {
-                    jobProgress.textContent = result.error;
+                    appendLog(`Error: ${result.error}`);
                 } else {
-                    jobProgress.textContent = "Did not finish.";
+                    appendLog(`Failed: ${errText}`);
                 }
                 if (result && result.warnings && result.warnings.length) {
-                    jobError.textContent += (jobError.textContent ? "\n" : "") + result.warnings.join("\n");
+                    for (const w of result.warnings) appendLog(`Warning: ${w}`);
                 }
                 return;
             }
-            const n = (result.placed || []).length;
-            const names = (result.placed || []).map((p) => p.clipName).filter(Boolean);
-            jobProgress.textContent =
-                `Placed ${n} isolated WAV(s)` +
-                (names.length ? ` — ${names.join(", ")}` : "") +
-                (result.outputDir ? `  ·  ${result.outputDir}` : "") +
-                (result.mute && result.mute.muted
-                    ? `  ·  muted ${result.mute.muted} original clip(s)`
-                    : "");
+            success = true;
+            jobError.textContent = "";
+            if (overallBar) overallBar.style.width = "100%";
+            if (currentBar) currentBar.style.width = "100%";
+            const placed = result.placed || [];
+            const n = placed.length;
+            isCached = placed.some((p) => p.cacheHit);
+            if (isCached) {
+                setBadge("cached", "Cache Hit");
+                if (overallPctText) overallPctText.textContent = "100% (Instant)";
+                if (currentPassPctText) currentPassPctText.textContent = "Cache Hit";
+                if (statPasses) statPasses.textContent = "Cached";
+                appendLog("⚡ Cache Hit: Reused previously isolated audio (instant).");
+                appendLog("Tip: Uncheck 'Use cache' above if you want to re-process with new mix settings.");
+            } else {
+                setBadge("done", "Completed");
+                if (overallPctText) overallPctText.textContent = "100%";
+                if (currentPassPctText) currentPassPctText.textContent = "Done";
+                const speedText = lastSpeed > 0 ? `${lastSpeed.toFixed(1)}× Real-time` : "Done";
+                appendLog(`Inference completed successfully (${speedText}).`);
+            }
+            const names = placed.map((p) => p.clipName).filter(Boolean);
+            appendLog(`Placed ${n} isolated WAV(s) -> track "PV Isolated Voice"${names.length ? ` (${names.join(", ")})` : ""}`);
+            if (result.mute && result.mute.muted) {
+                appendLog(`Muted ${result.mute.muted} original timeline clip(s).`);
+            }
             if (result.warnings && result.warnings.length) {
-                jobError.textContent = result.warnings.join("\n");
+                for (const w of result.warnings) appendLog(`Notice: ${w}`);
             }
         } catch (err) {
-            jobError.textContent = String(err && err.message ? err.message : err);
-            jobProgress.textContent = "Job failed. Timeline was not changed.";
+            setBadge("error", "Error");
+            if (overallBar) overallBar.style.width = "0%";
+            if (currentBar) currentBar.style.width = "0%";
+            const msg = String(err && err.message ? err.message : err);
+            jobError.textContent = msg;
+            appendLog(`Job failed: ${msg}`);
         } finally {
+            stopJobTelemetry(success, isCached);
             setJobRunning(false);
         }
     });
 
     cancelBtn.addEventListener("click", async () => {
         cancelBtn.disabled = true;
+        appendLog("Cancel requested…");
         try {
             const result = await window.perfectvoice.cancelJob();
             if (!result || !result.ok) {
                 jobError.textContent = (result && result.error) || "Cancel failed.";
-            } else {
-                jobProgress.textContent = "Cancel requested…";
+                appendLog(`Cancel failed: ${(result && result.error) || "Unknown"}`);
             }
         } catch (err) {
             jobError.textContent = String(err && err.message ? err.message : err);
         }
-    });
-
-    downloadBtn.addEventListener("click", async () => {
-        jobError.textContent = "";
-        await ensureModelDownloaded();
     });
 });

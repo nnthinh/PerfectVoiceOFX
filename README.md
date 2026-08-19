@@ -13,6 +13,10 @@
 
 The repo is named `PerfectVoiceOFX` because that is what the project was called on day one. **The host is not OpenFX.** Resolve’s OFX surface is an image-effect API. There is no official audio buffer. PerfectVoice lives at **Workspace → Workflow Integrations → PerfectVoice**: an Electron panel plus a localhost Python sidecar.
 
+<p align="center">
+  <img src="docs/assets/screenshot.png" alt="PerfectVoice Workflow Integration Panel" width="480">
+</p>
+
 <p align="center"><img src="docs/assets/mark.svg" width="72" height="72" alt="PerfectVoice mark"></p>
 
 ## What it is

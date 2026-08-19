@@ -284,13 +284,12 @@ def process_clip(
     def _fwd_progress(info: Mapping[str, Any]) -> None:
         if on_progress is None:
             return
-        on_progress(
-            {
-                "clip_id": clip_id,
-                "segment_offset": info.get("segment_offset", 0),
-                "audio_length": info.get("audio_length", 0),
-            }
-        )
+        payload: dict[str, Any] = {
+            "clip_id": clip_id,
+            "clip_name": clip.get("name") or clip.get("display_name") or "clip",
+            **dict(info),
+        }
+        on_progress(payload)
 
     tmp = Path(tempfile.mkdtemp(prefix="pv-clip-"))
     try:

@@ -137,6 +137,18 @@ describe("buildCreateJobRequest", () => {
         assert.equal(quality.body.params.model, "htdemucs_ft");
     });
 
+    it("respects custom wet, shifts, and overlap parameters", () => {
+        const built = buildCreateJobRequest(sampleInspect(), {
+            wet: 1.0,
+            shifts: 4,
+            overlap: 0.5,
+        });
+        assert.equal(built.ok, true);
+        assert.equal(built.body.params.wet, 1.0);
+        assert.equal(built.body.params.shifts, 4);
+        assert.equal(built.body.params.overlap, 0.5);
+    });
+
     it("skips rejected clips and fails when none remain", () => {
         const inspect = sampleInspect({ rejected: true });
         const built = buildCreateJobRequest(inspect);

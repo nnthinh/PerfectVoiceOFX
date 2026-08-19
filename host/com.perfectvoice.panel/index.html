@@ -7,82 +7,235 @@
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-            margin: 20px;
+            margin: 16px 20px;
             color: #eee;
             background: #1b1b1b;
         }
-        h1 { font-size: 20px; margin: 0 0 4px; }
-        .sub { color: #aaa; margin: 0 0 16px; font-size: 13px; }
-        .row { margin: 8px 0; font-size: 13px; }
+        h1 { font-size: 19px; margin: 0 0 3px; }
+        .sub { color: #aaa; margin: 0 0 12px; font-size: 12px; }
+        .row { margin: 6px 0; font-size: 13px; }
         .ok { color: #6c6; }
         .off { color: #e88; }
         button {
             padding: 8px 14px;
             cursor: pointer;
-            margin-top: 8px;
+            margin-top: 6px;
         }
         button.primary {
-            font-size: 15px;
+            font-size: 14px;
             font-weight: 600;
-            padding: 12px 18px;
+            padding: 10px 16px;
             width: 100%;
         }
         button:disabled {
             cursor: not-allowed;
             opacity: 0.55;
         }
-        #enginePath, #health, #jobProgress {
+        #enginePath {
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 12px;
             white-space: pre-wrap;
             word-break: break-all;
         }
-        #health, #jobProgress {
+        .job-card {
+            margin: 14px 0 8px;
             background: #111;
-            padding: 8px;
-            min-height: 2.5em;
-            margin: 6px 0 0;
+            border: 1px solid #2d2d2d;
+            border-radius: 4px;
+            overflow: hidden;
         }
-        #error, #resolveNote, #inspectError, #jobError { color: #e88; font-size: 12px; margin-top: 8px; }
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #181818;
+            padding: 6px 10px;
+            border-bottom: 1px solid #282828;
+            font-size: 11px;
+            font-weight: 600;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .job-badge {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        .job-badge.idle { background: #222; color: #888; }
+        .job-badge.running { background: #133830; color: #3ee0c5; }
+        .job-badge.cached { background: #382c13; color: #f5a623; }
+        .job-badge.done { background: #183818; color: #52c41a; }
+        .job-badge.error { background: #381818; color: #ff4d4f; }
+
+        .progress-section {
+            padding: 10px 12px 8px;
+            background: #141414;
+            border-bottom: 1px solid #242424;
+        }
+        .progress-block {
+            margin-bottom: 8px;
+        }
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+        .progress-label {
+            color: #aaa;
+            font-weight: 500;
+        }
+        .progress-stat {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-weight: 600;
+            color: #3ee0c5;
+        }
+        .bar-track {
+            height: 6px;
+            background: #202020;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .bar-track.sub-track {
+            height: 4px;
+            background: #1b1b1b;
+        }
+        .bar-fill {
+            height: 100%;
+            width: 0%;
+            transition: width 0.15s ease-out;
+        }
+        .bar-fill.main-bar {
+            background: linear-gradient(90deg, #2dbfa6, #3ee0c5);
+        }
+        .bar-fill.sub-bar {
+            background: #f5a623;
+        }
+        .job-stats-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 6px;
+            margin-top: 4px;
+            border-top: 1px solid #202020;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11px;
+        }
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .stat-k {
+            color: #777;
+        }
+        .stat-v {
+            color: #eee;
+            font-weight: 600;
+        }
+
+        .job-log {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            color: #ddd;
+            padding: 8px 10px;
+            min-height: 55px;
+            max-height: 130px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            background: #0c0c0c;
+        }
+        #error, #resolveNote, #jobError { color: #e88; font-size: 12px; margin-top: 8px; }
         hr { border: 0; border-top: 1px solid #333; margin: 20px 0 16px; }
         .hint { color: #888; font-size: 12px; margin: 6px 0 0; }
-        .clips { list-style: none; padding: 0; margin: 8px 0 0; }
-        .clips li {
-            background: #111;
-            border: 1px solid #333;
-            padding: 8px 10px;
-            margin: 6px 0;
-            font-size: 12px;
-        }
-        .clips .name { font-weight: 600; }
-        .clips .path {
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            word-break: break-all;
-            color: #bbb;
-            margin: 2px 0;
-        }
-        .clips .meta { color: #aaa; }
-        .clips .rej { color: #e88; margin: 2px 0 0; }
-        .clips .okc { color: #6c6; margin: 2px 0 0; }
-        .clips .warn { color: #db6; margin: 2px 0 0; }
-        .clips .dup { color: #888; }
-        #inspectMeta { white-space: pre-wrap; }
         button + button { margin-left: 8px; }
         label.check { display: block; margin: 8px 0; font-size: 13px; }
         label.check input { margin-right: 6px; }
         select {
             padding: 6px 8px;
-            margin-top: 8px;
+            margin-top: 4px;
             background: #111;
             color: #eee;
             border: 1px solid #444;
+            border-radius: 4px;
+            width: 100%;
+            box-sizing: border-box;
         }
-        details.dev {
-            margin-top: 20px;
-            color: #888;
+        .param-row {
+            margin: 14px 0;
+        }
+        .param-row label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #eee;
+            margin-bottom: 4px;
+        }
+        .param-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 4px;
+        }
+        .param-control input[type="range"] {
+            flex: 1;
+            accent-color: #3ee0c5;
+            cursor: pointer;
+        }
+        .param-val {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 12px;
+            min-width: 95px;
+            color: #3ee0c5;
+            font-weight: 600;
         }
-        details.dev summary { cursor: pointer; }
+        .param-desc {
+            color: #888;
+            font-size: 11px;
+            line-height: 1.4;
+            margin: 4px 0 0;
+        }
+        .param-desc strong {
+            color: #bbb;
+        }
+        .param-desc em {
+            color: #aaa;
+            font-style: normal;
+        }
+        .telemetry-box {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #141414;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 8px 12px;
+            margin: 8px 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11px;
+        }
+        .telemetry-box[hidden] {
+            display: none;
+        }
+        .telemetry-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .telemetry-label {
+            color: #888;
+        }
+        .telemetry-val {
+            color: #3ee0c5;
+            font-weight: 600;
+        }
         #dlWrap {
             margin: 12px 0 0;
             background: #111;
@@ -121,17 +274,43 @@
     <p id="error"></p>
     <p id="resolveNote"></p>
 
-    <p>
+    <div class="param-row">
         <label for="modelSelect">Preset</label>
         <select id="modelSelect">
             <option value="htdemucs" selected>Fast (htdemucs)</option>
             <option value="htdemucs_ft">Quality (htdemucs_ft)</option>
         </select>
-    </p>
-    <label class="check">
-        <input id="dfnCheck" type="checkbox">
-        Also reduce residual room / HVAC noise
-    </label>
+    </div>
+
+    <div class="param-row">
+        <label for="wetInput">Voice isolation mix (Wet)</label>
+        <div class="param-control">
+            <input id="wetInput" type="range" min="0" max="1" step="0.05" value="0.85">
+            <span id="wetVal" class="param-val">0.85 (85%)</span>
+        </div>
+        <p class="param-desc">Ratio of isolated voice vs original audio. <strong>1.00 (100%)</strong> = pure isolated voice (maximum noise & music removal). <strong>0.85 (85%)</strong> = blends 15% original audio for a more natural room tone. <em>Default: 0.85</em></p>
+    </div>
+
+    <div class="param-row">
+        <label for="shiftsSelect">Demucs shifts</label>
+        <select id="shiftsSelect">
+            <option value="1" selected>1 (Fast — Default)</option>
+            <option value="2">2 (Better quality — 2× slower)</option>
+            <option value="4">4 (Best quality — 4× slower, least music bleed)</option>
+        </select>
+        <p class="param-desc">Random time-shift averaging (test-time augmentation). Higher values reduce music bleed and artifacts in complex audio, but increase processing time proportionally. <em>Default: 1</em></p>
+    </div>
+
+    <div class="param-row">
+        <label for="overlapSelect">Segment overlap</label>
+        <select id="overlapSelect">
+            <option value="0.25" selected>0.25 (25% — Default)</option>
+            <option value="0.5">0.50 (50% — Smoother chunk transitions)</option>
+            <option value="0.75">0.75 (75% — Maximum overlap)</option>
+        </select>
+        <p class="param-desc">Overlap between 7.8s Demucs processing chunks. Higher overlap cross-fades segment boundaries more smoothly and prevents dropouts in complex sections. <em>Default: 0.25</em></p>
+    </div>
+
     <label class="check">
         <input id="muteCheck" type="checkbox">
         Mute original clips
@@ -151,23 +330,74 @@
         <div class="bar"><div id="dlBar"></div></div>
         <div id="dlLog"></div>
     </div>
-    <pre id="jobProgress">Starting engine…</pre>
-    <p id="jobError"></p>
-    <p class="hint">Uses the timeline selection (linked A/V or audio-only). First run downloads the model, then writes a new track: PV Isolated Voice.</p>
-    <div id="inspectMeta" class="hint"></div>
-    <ul id="clipList" class="clips"></ul>
-    <p id="inspectError"></p>
+    <div class="job-card">
+        <div class="job-header">
+            <span class="job-title">Inference Monitor</span>
+            <span id="jobBadge" class="job-badge idle">IDLE</span>
+        </div>
+        
+        <!-- Dual Progress Section -->
+        <div class="progress-section">
+            <!-- 1. Total Job Progress -->
+            <div class="progress-block">
+                <div class="progress-info">
+                    <span class="progress-label">Total Progress</span>
+                    <span id="overallPctText" class="progress-stat">0% (0/0)</span>
+                </div>
+                <div class="bar-track"><div id="overallBar" class="bar-fill main-bar"></div></div>
+            </div>
 
-    <details class="dev">
-        <summary>Developer</summary>
-        <p>
-            <button id="startBtn" type="button">Start engine</button>
-            <button id="inspectBtn" type="button">Inspect selection</button>
-            <button id="placeBtn" type="button">Place test WAV</button>
-            <button id="downloadBtn" type="button">Download model</button>
-        </p>
-        <div class="row">Health</div>
-        <pre id="health">—</pre>
-    </details>
+            <!-- 2. Current Pass Progress -->
+            <div class="progress-block">
+                <div class="progress-info">
+                    <span id="currentPassTitle" class="progress-label">Current Pass</span>
+                    <span id="currentPassPctText" class="progress-stat">—</span>
+                </div>
+                <div class="bar-track sub-track"><div id="currentBar" class="bar-fill sub-bar"></div></div>
+            </div>
+
+            <!-- ETA & Performance Stats -->
+            <div class="job-stats-row">
+                <div class="stat-item">
+                    <span class="stat-k">Elapsed:</span>
+                    <span id="statElapsed" class="stat-v">00:00</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-k">Remaining:</span>
+                    <span id="statEta" class="stat-v">—</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-k">Speed:</span>
+                    <span id="statSpeed" class="stat-v">—</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-k">Passes:</span>
+                    <span id="statPasses" class="stat-v">—</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Terminal Console Log -->
+        <div id="jobLog" class="job-log">Ready. Select a clip with audio, then click Clean voice.</div>
+    </div>
+    <div id="telemetryWrap" class="telemetry-box" hidden>
+        <div class="telemetry-item">
+            <span class="telemetry-label">Compute:</span>
+            <span id="telCompute" class="telemetry-val">—</span>
+        </div>
+        <div class="telemetry-item">
+            <span class="telemetry-label">RAM:</span>
+            <span id="telRam" class="telemetry-val">—</span>
+        </div>
+        <div class="telemetry-item">
+            <span class="telemetry-label">CPU:</span>
+            <span id="telCpu" class="telemetry-val">—</span>
+        </div>
+        <div class="telemetry-item">
+            <span class="telemetry-label">Time:</span>
+            <span id="telTime" class="telemetry-val">—</span>
+        </div>
+    </div>
+    <p id="jobError"></p>
 </body>
 </html>

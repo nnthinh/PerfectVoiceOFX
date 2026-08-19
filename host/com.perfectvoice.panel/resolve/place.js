@@ -226,6 +226,67 @@ function defaultTestWavPath() {
     );
 }
 
+function removeExistingTimelineClips(timeline, trackIndex, startRec, endRec) {
+    if (!timeline || !trackIndex || !isCallable(timeline, "GetItemListInTrack")) return;
+    try {
+        const existingClips = timeline.GetItemListInTrack("audio", trackIndex);
+        if (Array.isArray(existingClips) && existingClips.length && isCallable(timeline, "DeleteClips")) {
+            const toDelete = [];
+            for (const item of existingClips) {
+                if (!item) continue;
+                const itemStart = isCallable(item, "GetStart") ? Number(item.GetStart()) : null;
+                const itemEnd = isCallable(item, "GetEnd") ? Number(item.GetEnd()) : null;
+                if (itemStart != null && itemEnd != null) {
+                    if (itemStart < endRec && itemEnd > startRec) {
+                        toDelete.push(item);
+                    }
+                }
+            }
+            if (toDelete.length) {
+                timeline.DeleteClips(toDelete);
+            }
+        }
+    } catch {
+        // non-fatal if track cleanup is not supported
+    }
+}
+
+function removeExistingMediaPoolClip(mediaPool, bin, wavPath) {
+    if (!mediaPool || !bin || !wavPath) return;
+    try {
+        const fullPath = path.resolve(wavPath);
+        const baseName = path.basename(wavPath);
+        const clipList = callValue(bin, "GetClipList") || [];
+        if (Array.isArray(clipList) && clipList.length) {
+            const toDelete = [];
+            for (const item of clipList) {
+                if (!item) continue;
+                let match = false;
+                if (isCallable(item, "GetClipProperty")) {
+                    const itemPath = item.GetClipProperty("File Path");
+                    if (itemPath && path.resolve(itemPath) === fullPath) {
+                        match = true;
+                    }
+                }
+                if (!match && isCallable(item, "GetName")) {
+                    const itemName = item.GetName();
+                    if (itemName === baseName || itemName === path.parse(baseName).name) {
+                        match = true;
+                    }
+                }
+                if (match) {
+                    toDelete.push(item);
+                }
+            }
+            if (toDelete.length && isCallable(mediaPool, "DeleteClips")) {
+                mediaPool.DeleteClips(toDelete);
+            }
+        }
+    } catch {
+        // non-fatal
+    }
+}
+
 function placeIsolated(resolve, params) {
     const p = params || {};
     if (!resolve) {
@@ -275,22 +336,7 @@ function placeIsolated(resolve, params) {
         return { ok: false, error: "Need a current timeline and media pool." };
     }
 
-    ensureBin(mediaPool, p.binName || MEDIA_BIN);
-    const imported = callValue(mediaPool, "ImportMedia", [path.resolve(p.wavPath)]);
-    if (!Array.isArray(imported) || !imported.length) {
-        return { ok: false, error: `ImportMedia failed for ${p.wavPath}` };
-    }
-    const mediaPoolItem = imported[0];
-    // Imported WAV must not keep a reel/TOD Start TC or Resolve places it
-    // on the timeline by file timecode instead of recordFrame.
-    if (mediaPoolItem && isCallable(mediaPoolItem, "SetClipProperty")) {
-        try {
-            mediaPoolItem.SetClipProperty("Start TC", "00:00:00:00");
-        } catch {
-            // property name may differ; recordFrame is still applied below
-        }
-    }
-
+    // 1. Ensure isolated audio track exists
     let trackIndex = p.trackIndex != null ? Number(p.trackIndex) : 0;
     if (!trackIndex) {
         trackIndex = ensureIsolatedTrack(timeline, p.trackName || ISOLATED_TRACK);
@@ -299,6 +345,44 @@ function placeIsolated(resolve, params) {
         }
     }
 
+    // 2. STEP 1: Delete old audio clip on the timeline in this frame range
+    const startRec = Number(p.recordFrame);
+    const endRec = startRec + (Number(computed.place.endFrame) - Number(computed.place.startFrame));
+    removeExistingTimelineClips(timeline, trackIndex, startRec, endRec);
+
+    // 3. STEP 2: Delete old MediaPoolItem from Media Pool bin (so Resolve re-reads fresh audio from disk)
+    const bin = ensureBin(mediaPool, p.binName || MEDIA_BIN);
+    if (bin) {
+        removeExistingMediaPoolClip(mediaPool, bin, p.wavPath);
+    }
+
+    // 4. STEP 3: Import fresh WAV into Media Pool
+    const imported = callValue(mediaPool, "ImportMedia", [path.resolve(p.wavPath)]);
+    if (!Array.isArray(imported) || !imported.length) {
+        return { ok: false, error: `ImportMedia failed for ${p.wavPath}` };
+    }
+    const mediaPoolItem = imported[0];
+    if (mediaPoolItem) {
+        if (isCallable(mediaPoolItem, "SetClipProperty")) {
+            try {
+                mediaPoolItem.SetClipProperty("Start TC", "00:00:00:00");
+            } catch {
+                // property name may differ; recordFrame is still applied below
+            }
+        }
+        if (isCallable(mediaPoolItem, "SetClipMarkInOut")) {
+            try {
+                mediaPoolItem.SetClipMarkInOut(
+                    Number(computed.place.startFrame),
+                    Number(computed.place.endFrame),
+                );
+            } catch {
+                // optional
+            }
+        }
+    }
+
+    // 5. STEP 4: Append fresh clip to Timeline
     const clipInfo = appendClipInfo(
         mediaPoolItem,
         computed.place,

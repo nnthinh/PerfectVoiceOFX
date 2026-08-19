@@ -153,17 +153,81 @@ def _progress_callback(
     *,
     n_samples: int,
     window_start: list[int],
+    device_used: str = "cpu",
+    shifts: int = 1,
+    overlap: float = 0.25,
+    segment: float = 7.8,
 ) -> Callable[[dict[str, Any]], None]:
+    sample_rate = MODEL_SAMPLE_RATE
+    seg_samples = max(1, int(float(segment) * sample_rate))
+    stride = max(1, int((1.0 - float(overlap)) * seg_samples))
+    offsets = list(range(0, n_samples, stride)) if n_samples > 0 else [0]
+    total_chunks = max(1, len(offsets))
+    total_shifts = max(1, int(shifts))
+    total_passes = total_chunks * total_shifts
+
     def callback(info: dict[str, Any]) -> None:
         raise_if_cancelled(cancel_event)
         if on_progress is None:
             return
         data = info if isinstance(info, dict) else {}
         offset = int(data.get("segment_offset") or 0) + int(window_start[0])
+        shift_idx = int(data.get("shift_idx") or 0)
+        total_models = max(1, int(data.get("models") or 1))
+        model_idx = int(data.get("model_idx_in_bag") or 0)
+        
+        chunk_idx = 0
+        for idx, off in enumerate(offsets):
+            if offset >= off:
+                chunk_idx = idx
+            else:
+                break
+        
+        all_passes = total_chunks * total_shifts * total_models
+        current_pass = min(
+            all_passes,
+            (model_idx * total_shifts + shift_idx) * total_chunks + chunk_idx + 1
+        )
+        overall_pct = round((current_pass / all_passes) * 100, 1)
+        chunk_pct = round(min(100.0, ((offset + seg_samples) / n_samples) * 100), 1) if n_samples > 0 else 100.0
+
+        rss_mb = 0.0
+        cpu_pct = 0.0
+        try:
+            import psutil
+            proc = psutil.Process()
+            rss_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
+            cpu_pct = round(proc.cpu_percent(interval=None), 1)
+        except Exception:
+            try:
+                import resource
+                rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                rss_mb = round(rss / (1024 * 1024 if sys.platform == "darwin" else 1024), 1)
+            except Exception:
+                pass
+
+        audio_dur_s = round(n_samples / sample_rate, 2)
+        pos_s = round(min(n_samples, offset + seg_samples) / sample_rate, 2)
+
         on_progress(
             {
                 "segment_offset": offset,
                 "audio_length": int(n_samples),
+                "audio_dur_s": audio_dur_s,
+                "current_pos_s": pos_s,
+                "chunk_idx": chunk_idx + 1,
+                "total_chunks": total_chunks,
+                "shift_idx": shift_idx + 1,
+                "total_shifts": total_shifts,
+                "model_idx": model_idx + 1,
+                "total_models": total_models,
+                "current_pass": current_pass,
+                "total_passes": all_passes,
+                "overall_pct": overall_pct,
+                "chunk_pct": chunk_pct,
+                "device": device_used,
+                "memory_mb": rss_mb,
+                "cpu_percent": cpu_pct,
             }
         )
 
@@ -394,6 +458,10 @@ def separate_vocals(req: SeparateRequest, local_repo: Path) -> SeparateResult:
         req.on_progress,
         n_samples=n_samples,
         window_start=window_start,
+        device_used=device,
+        shifts=int(req.shifts),
+        overlap=float(req.overlap),
+        segment=float(req.segment),
     )
 
     with _offline_hub_env():

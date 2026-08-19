@@ -223,17 +223,29 @@ function resolveEnhancer(options) {
     return "none";
 }
 
+function validNumber(val, min, max, fallback) {
+    const n = finiteNumber(val);
+    if (n == null || n < min || n > max) return fallback;
+    return n;
+}
+
+function validInteger(val, min, max, fallback) {
+    const n = finiteNumber(val);
+    if (n == null || n < min || n > max || !Number.isInteger(n)) return fallback;
+    return n;
+}
+
 function buildParams(outputDir, roots, options) {
     const opts = options || {};
     return {
         schema: "perfectvoice.params.v1",
         model: resolveModel(opts),
         device: opts.device || "auto",
-        segment: opts.segment != null ? Number(opts.segment) : DEFAULT_SEGMENT,
-        overlap: opts.overlap != null ? Number(opts.overlap) : DEFAULT_OVERLAP,
-        shifts: opts.shifts != null ? Number(opts.shifts) : DEFAULT_SHIFTS,
+        segment: validNumber(opts.segment, 0.1, 7.8, DEFAULT_SEGMENT),
+        overlap: validNumber(opts.overlap, 0, 0.99, DEFAULT_OVERLAP),
+        shifts: validInteger(opts.shifts, 1, 16, DEFAULT_SHIFTS),
         vocals_only_bag: false,
-        wet: opts.wet != null ? Number(opts.wet) : DEFAULT_WET,
+        wet: validNumber(opts.wet, 0, 1, DEFAULT_WET),
         output_gain_db: opts.outputGainDb != null ? Number(opts.outputGainDb) : 0,
         mono: Boolean(opts.mono),
         sample_format: opts.sampleFormat || "pcm24",
