@@ -184,7 +184,7 @@ function parseTimelineFrameRate(raw) {
     return asFps(value);
 }
 
-function parseMediaStartSeconds(raw) {
+function parseMediaStartSeconds(raw, fpsF) {
     if (raw == null) return null;
     if (typeof raw === "number" && Number.isFinite(raw)) return raw;
     const text = String(raw).trim();
@@ -193,16 +193,24 @@ function parseMediaStartSeconds(raw) {
         const n = Number(text);
         return Number.isFinite(n) ? n : null;
     }
-    const m = text.match(/^(\d+):(\d{2}):(\d{2})(?:[:;.](\d+))?/);
+    const m = text.match(/^(\d+):(\d{2}):(\d{2})(?:([:;.])(\d+))?/);
     if (!m) return null;
-    return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+    let seconds = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+    if (m[5] != null) {
+        if (m[4] === ".") {
+            seconds += Number(`0.${m[5]}`);
+        } else if (fpsF > 0) {
+            seconds += Number(m[5]) / fpsF;
+        }
+    }
+    return seconds;
 }
 
-function startTcFromDump(dump) {
+function startTcFromDump(dump, fpsF) {
     if (!dump || typeof dump !== "object") return null;
     for (const [key, val] of Object.entries(dump)) {
         if (!/start\s*(tc|timecode)/i.test(key)) continue;
-        const n = parseMediaStartSeconds(val);
+        const n = parseMediaStartSeconds(val, fpsF);
         if (n != null) return n;
     }
     return null;
@@ -218,6 +226,19 @@ function fileRelativeTimes(t0, t1, fileDur, opts) {
         return { t0, t1, shifted: false, origin: 0 };
     }
     const eps = 1e-3;
+    const frameS = options.frameSeconds > 0 ? options.frameSeconds : 1 / 30;
+    const span = t1 - t0;
+    // Whole-file clip: span matches duration. Do not keep a phantom 0.36s
+    // in-point from Start TC parsed without frames (21:05:40 vs 21:05:40.360).
+    if (Math.abs(span - fileDur) <= frameS + eps) {
+        const alreadyFile = t0 >= -eps && t1 <= fileDur + 1;
+        return {
+            t0: 0,
+            t1: fileDur,
+            shifted: !alreadyFile || t0 > frameS,
+            origin: t0,
+        };
+    }
     if (t0 >= -eps && t1 <= fileDur + 1) {
         return {
             t0: Math.max(0, t0),
@@ -228,8 +249,9 @@ function fileRelativeTimes(t0, t1, fileDur, opts) {
     }
     const startTc = options.startTc;
     if (startTc != null && Number.isFinite(startTc)) {
-        const a = t0 - startTc;
-        const b = t1 - startTc;
+        let a = t0 - startTc;
+        let b = t1 - startTc;
+        if (Math.abs(a) < frameS) a = 0;
         if (b > a && a < fileDur && b > 0) {
             return {
                 t0: Math.max(0, a),
@@ -241,7 +263,6 @@ function fileRelativeTimes(t0, t1, fileDur, opts) {
     }
     const leftS = options.leftOffsetSeconds;
     if (leftS != null && Number.isFinite(leftS) && leftS >= 0 && leftS < fileDur) {
-        const span = t1 - t0;
         const a = leftS;
         const b = Math.min(leftS + span, fileDur);
         if (b > a) {
@@ -249,7 +270,6 @@ function fileRelativeTimes(t0, t1, fileDur, opts) {
         }
     }
     if (t0 >= fileDur - eps) {
-        const span = t1 - t0;
         return { t0: 0, t1: Math.min(span, fileDur), shifted: true, origin: t0 };
     }
     return { t0, t1, shifted: false, origin: 0 };

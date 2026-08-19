@@ -145,10 +145,15 @@ def file_relative_times(
     """
     if file_dur <= 0 or t1 <= t0:
         return t0, t1
+    span = t1 - t0
+    # Whole-file clip (span ≈ duration): Start TC parsed without frames
+    # must not invent a 0.36s in-point (21:05:40 vs 21:05:40.360).
+    if abs(span - file_dur) <= (1.0 / 24.0) + 1e-3:
+        return 0.0, file_dur
     if t0 >= -1e-3 and t1 <= file_dur + 1.0:
         return max(0.0, t0), min(t1, file_dur)
     if t0 >= file_dur - 1e-3:
-        return 0.0, min(t1 - t0, file_dur)
+        return 0.0, min(span, file_dur)
     return t0, t1
 
 
@@ -448,6 +453,8 @@ def extract_with_handles(
             "1",
             "-metadata",
             f"originator={BWF_ORIGINATOR}",
+            "-metadata",
+            "time_reference=0",
             str(out),
         ],
         cancel_event=cancel_event,
@@ -556,6 +563,8 @@ def write_wav(
                 "1",
                 "-metadata",
                 f"originator={originator}",
+                "-metadata",
+                "time_reference=0",
                 str(dest),
             ],
             cancel_event=cancel_event,

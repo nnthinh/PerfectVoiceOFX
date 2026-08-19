@@ -25,6 +25,13 @@ function finiteNumber(value) {
     return Number.isFinite(n) ? n : null;
 }
 
+function timelineStartFrame(item) {
+    // README: GetStart([subframe_precision]) — prefer subframe when the host accepts it.
+    const sub = finiteNumber(callValue(item, "GetStart", true));
+    if (sub != null) return sub;
+    return finiteNumber(callValue(item, "GetStart"));
+}
+
 function sourceTimes(item) {
     const t0 = finiteNumber(callValue(item, "GetSourceStartTime"));
     const t1 = finiteNumber(callValue(item, "GetSourceEndTime"));
@@ -149,7 +156,7 @@ function inspectClip(row, ctx) {
         t1 = times.sourceEndFrame / f;
     }
 
-    const recordFrame = item ? finiteNumber(callValue(item, "GetStart")) : null;
+    const recordFrame = item ? timelineStartFrame(item) : null;
     const durationFrames = item ? finiteNumber(callValue(item, "GetDuration")) : null;
     const fusionCompCount = item ? finiteNumber(callValue(item, "GetFusionCompCount")) : null;
     const voiceIsolationAvailable = item ? isCallable(item, "GetVoiceIsolationState") : false;
@@ -178,8 +185,9 @@ function inspectClip(row, ctx) {
         const fpsF = srcFps && srcFps.num > 0 ? srcFps.num / srcFps.den : null;
         const leftFrames = item ? finiteNumber(callValue(item, "GetLeftOffset")) : null;
         const rel = fileRelativeTimes(t0, t1, durInfo.fileDur, {
-            startTc: startTcFromDump(dump),
+            startTc: startTcFromDump(dump, fpsF),
             leftOffsetSeconds: leftFrames != null && fpsF ? leftFrames / fpsF : null,
+            frameSeconds: fpsF ? 1 / fpsF : 1 / 30,
         });
         timeShifted = rel.shifted;
         t0 = rel.t0;

@@ -53,6 +53,12 @@ describe("fileRelativeTimes", () => {
         assert.ok(Math.abs(r.t1 - 37.42) < 1e-9);
     });
 
+    it("does not keep a 0.36s phantom in-point when span ≈ file duration", () => {
+        const r = fileRelativeTimes(75940.36, 75977.78, 37.44, { frameSeconds: 1 / 30 });
+        assert.equal(r.t0, 0);
+        assert.ok(Math.abs(r.t1 - 37.44) < 1e-9);
+    });
+
     it("subtracts Start TC when present", () => {
         const r = fileRelativeTimes(75945.36, 75970.36, 37.42, { startTc: 75940.36 });
         assert.equal(r.shifted, true);

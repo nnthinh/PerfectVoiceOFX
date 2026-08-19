@@ -59,6 +59,11 @@ class FileRelativeTimesTests(unittest.TestCase):
         self.assertEqual(t0, 0.0)
         self.assertAlmostEqual(t1, 37.42)
 
+    def test_span_near_duration_is_whole_file(self):
+        t0, t1 = file_relative_times(75940.36, 75977.78, 37.44)
+        self.assertEqual(t0, 0.0)
+        self.assertAlmostEqual(t1, 37.44)
+
 
 class ClampHandlesTests(unittest.TestCase):
     def test_t0_lt_h_clamps_left(self):

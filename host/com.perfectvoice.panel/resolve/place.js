@@ -281,6 +281,15 @@ function placeIsolated(resolve, params) {
         return { ok: false, error: `ImportMedia failed for ${p.wavPath}` };
     }
     const mediaPoolItem = imported[0];
+    // Imported WAV must not keep a reel/TOD Start TC or Resolve places it
+    // on the timeline by file timecode instead of recordFrame.
+    if (mediaPoolItem && isCallable(mediaPoolItem, "SetClipProperty")) {
+        try {
+            mediaPoolItem.SetClipProperty("Start TC", "00:00:00:00");
+        } catch {
+            // property name may differ; recordFrame is still applied below
+        }
+    }
 
     let trackIndex = p.trackIndex != null ? Number(p.trackIndex) : 0;
     if (!trackIndex) {
