@@ -237,7 +237,7 @@ class NoClickZeroRequestTests(unittest.TestCase):
             if isinstance(node, ast.FunctionDef):
                 if node.name == "_create_job":
                     create_fn = node
-                elif node.name == "_run_stub":
+                elif node.name == "_run_job":
                     stub_fn = node
                 elif node.name == "_download_model":
                     download_fn = node
@@ -443,7 +443,7 @@ class DownloadEndpointTests(unittest.TestCase):
             assert isinstance(body, dict)
             self.assertEqual(body.get("status"), "queued")
             with patch.object(serve_mod, "STUB_HOLD_SECONDS", 0):
-                self.store._run_stub(str(body["id"]))
+                self.store._run_job(str(body["id"]))
         job_row = self.store.get(str(body["id"]))
         assert job_row is not None
         self.assertEqual(job_row.status, "error")

@@ -61,11 +61,16 @@ FORBIDDEN_HOST_NEEDLES = (
     "fbaipublicfiles.com",
     "amazonaws.com",
 )
-JOB_LOAD_PATHS = (
-    ENGINE_DIR / "perfectvoice_engine" / "serve.py",
+# Infer / job modules must not import the user-click fetcher.
+# serve.py may import weight_fetch for POST /v1/models/download only.
+JOB_INFER_PATHS = (
     ENGINE_DIR / "perfectvoice_engine" / "pipeline.py",
     ENGINE_DIR / "perfectvoice_engine" / "separate.py",
     ENGINE_DIR / "perfectvoice_engine" / "models.py",
+)
+JOB_LOAD_PATHS = (
+    ENGINE_DIR / "perfectvoice_engine" / "serve.py",
+    *JOB_INFER_PATHS,
 )
 
 
@@ -829,7 +834,7 @@ class JobHttpInProcessTests(unittest.TestCase):
 
 class JobStaticContractTests(unittest.TestCase):
     def test_jobs_do_not_call_weight_download(self) -> None:
-        for path in JOB_LOAD_PATHS:
+        for path in JOB_INFER_PATHS:
             text = path.read_text(encoding="utf-8")
             tree = ast.parse(text, filename=str(path))
             for node in ast.walk(tree):
@@ -843,6 +848,25 @@ class JobStaticContractTests(unittest.TestCase):
                     self.assertNotIn("download_demucs", mod, f"{path.name} imports {mod}")
             self.assertNotIn("huggingface.co/adefossez", text)
             self.assertNotIn("dl.fbaipublicfiles.com", text)
+
+        serve = ENGINE_DIR / "perfectvoice_engine" / "serve.py"
+        serve_text = serve.read_text(encoding="utf-8")
+        self.assertNotIn("huggingface.co/adefossez", serve_text)
+        self.assertNotIn("dl.fbaipublicfiles.com", serve_text)
+        tree = ast.parse(serve_text, filename=str(serve))
+        job_fns = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name in {"_create_job", "_run_job"}
+        }
+        self.assertEqual(set(job_fns), {"_create_job", "_run_job"})
+        for name, fn in job_fns.items():
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Name) and node.id == "download_model":
+                    self.fail(f"{name} references download_model")
+                if isinstance(node, ast.Attribute) and node.attr == "download_model":
+                    self.fail(f"{name} references download_model")
 
     def test_pipeline_does_not_import_torch_or_demucs(self) -> None:
         banned = {"torch", "torchaudio", "demucs"}
