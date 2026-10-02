@@ -27,6 +27,7 @@ let resolveReady = false;
 let resolveError = STUDIO_REQUIRED;
 
 const ALLOWED_MODELS = new Set(["htdemucs", "htdemucs_ft"]);
+const SPEAKER_ENCODER_MODEL = "ecapa_voxceleb";
 const DEFAULT_UI_PREFS = {
     model: "htdemucs",
     dfn: false,
@@ -272,7 +273,7 @@ function registerIpc() {
     });
     ipcMain.handle("pv:downloadModel", async (_e, name) => {
         try {
-            const result = await downloadModel(name, (data) => {
+            const forward = (data) => {
                 try {
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         mainWindow.webContents.send("pv:downloadEvent", {
@@ -283,7 +284,12 @@ function registerIpc() {
                 } catch {
                     // ignore
                 }
-            });
+            };
+            let result = await downloadModel(name, forward);
+            // TSE needs the speaker encoder too; the engine skips it if present.
+            if (result && result.ok && name !== SPEAKER_ENCODER_MODEL) {
+                result = await downloadModel(SPEAKER_ENCODER_MODEL, forward);
+            }
             try {
                 await refreshSession();
             } catch {

@@ -560,5 +560,106 @@ class QualityCandidatesTests(unittest.TestCase):
         self.assertFalse(any(u.startswith(FB_HYBRID) for u in urls))
 
 
+class HubLfsFetchTests(unittest.TestCase):
+    """RoFormer / ECAPA checkpoints: sha256 verified before publish."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="pv-hub-"))
+        self._env = patch.dict(os.environ, {"PERFECTVOICE_APP_SUPPORT": str(self.tmp)})
+        self._env.start()
+        self.payload = secrets.token_bytes(4096)
+        self.hits: list[str] = []
+
+    def tearDown(self) -> None:
+        self._env.stop()
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _open(self, advertised: str | None):
+        def open_hub(url: str, seen: dict[str, str], timeout: float | None = None) -> FakeResponse:
+            self.hits.append(url)
+            if advertised is not None:
+                seen["sha256"] = advertised
+            return FakeResponse(self.payload, url)
+
+        return open_hub
+
+    def _fetch(self, advertised: str | None, pins: dict | None = None):
+        from perfectvoice_engine import weight_fetch as wf
+
+        dest = self.tmp / "models" / "ecapa" / "embedding_model.ckpt"
+        with (
+            patch.object(wf, "_open_hub", self._open(advertised)),
+            patch.dict(wf.HUB_PINS, pins or {}),
+        ):
+            wf._fetch_hub_file(wf.ECAPA_URL, dest, label="ECAPA", min_bytes=1, progress=None)
+        return dest
+
+    def test_verified_against_hub_sha256(self) -> None:
+        dest = self._fetch(_digest(self.payload))
+        self.assertEqual(dest.read_bytes(), self.payload)
+
+    def test_mismatch_does_not_publish(self) -> None:
+        with self.assertRaises(ChecksumMismatch):
+            self._fetch("0" * 64)
+        self.assertEqual(list((self.tmp / "models" / "ecapa").iterdir()), [])
+
+    def test_no_digest_is_refused(self) -> None:
+        from perfectvoice_engine.weight_fetch import ECAPA_URL, UnverifiedDownload
+
+        with self.assertRaises(UnverifiedDownload):
+            self._fetch(None, {ECAPA_URL: None})
+        self.assertEqual(list((self.tmp / "models" / "ecapa").iterdir()), [])
+
+    def test_pin_wins_over_hub_header(self) -> None:
+        from perfectvoice_engine.weight_fetch import ECAPA_URL
+
+        with self.assertRaises(ChecksumMismatch):
+            self._fetch(_digest(self.payload), {ECAPA_URL: "f" * 64})
+        dest = self._fetch(None, {ECAPA_URL: _digest(self.payload)})
+        self.assertTrue(dest.is_file())
+
+    def test_download_speaker_encoder_skips_when_present(self) -> None:
+        from perfectvoice_engine import weight_fetch as wf
+        from perfectvoice_engine.tse.weights import ECAPA_MIN_BYTES, ecapa_checkpoint_path
+
+        path = ecapa_checkpoint_path()
+        path.parent.mkdir(parents=True)
+        with path.open("wb") as fh:
+            fh.truncate(ECAPA_MIN_BYTES)
+        with patch.object(wf, "_open_hub", self._open(None)):
+            wf.download_model(wf.ECAPA_MODEL_ID, self.tmp)
+        self.assertEqual(self.hits, [])
+
+    def test_hub_redirect_allowlist(self) -> None:
+        from perfectvoice_engine.weight_fetch import ECAPA_URL, ROFORMER_URL, assert_hub_url_allowed
+
+        for ok in (
+            ECAPA_URL,
+            ROFORMER_URL,
+            "https://cas-bridge.xethub.hf.co/xet-bridge-us/abc",
+            "https://cdn-lfs-us-1.hf.co/repos/aa/bb/cc",
+        ):
+            self.assertEqual(assert_hub_url_allowed(ok), ok)
+        for bad in (
+            "http://cdn-lfs.hf.co/x",
+            "https://evil.example/hf.co",
+            "https://hf.co.evil.example/x",
+            "https://user:pw@cdn-lfs.hf.co/x",
+        ):
+            with self.assertRaises(HostNotAllowed):
+                assert_hub_url_allowed(bad)
+
+    def test_etag_header_parsing(self) -> None:
+        from perfectvoice_engine.weight_fetch import _etag_digest
+
+        digest = _digest(b"x")
+        self.assertEqual(_etag_digest(f'"{digest}"'), digest)
+        self.assertEqual(_etag_digest(f'W/"{digest.upper()}"'), digest)
+        self.assertIsNone(_etag_digest('"abc123"'))
+        self.assertIsNone(_etag_digest(None))
+
+
 if __name__ == "__main__":
     unittest.main()

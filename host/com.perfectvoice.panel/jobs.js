@@ -190,6 +190,12 @@ async function removeAccompaniment(resolve, options, onEvent) {
     if (!weights.ok) {
         return { ...weights, ...getPublicStatus() };
     }
+    if (opts.mode === "tse") {
+        const encoder = await ensureWeights("ecapa_voxceleb", onEvent);
+        if (!encoder.ok) {
+            return { ...encoder, ...getPublicStatus() };
+        }
+    }
 
     const inspect = inspectSelection(resolve, { handleS: opts.handleS });
     if (!inspect.ok) return inspect;

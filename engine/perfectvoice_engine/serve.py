@@ -44,7 +44,6 @@ from perfectvoice_engine.constants import (
     raise_if_cancelled,
 )
 from perfectvoice_engine.models import (
-    ALLOWED_MODELS,
     VOCALS_ONLY_SIG,
     ModelNotInstalled,
     default_local_repo,
@@ -52,7 +51,13 @@ from perfectvoice_engine.models import (
     models_ready,
     require_model,
 )
-from perfectvoice_engine.weight_fetch import WeightFetchError, download_model
+from perfectvoice_engine.tse.weights import (
+    ECAPA_MODEL_ID,
+    SpeakerEncoderNotInstalled,
+    is_ecapa_ready,
+    require_ecapa,
+)
+from perfectvoice_engine.weight_fetch import DOWNLOADABLE_MODELS, WeightFetchError, download_model
 
 ALLOWED_BIND = "127.0.0.1"
 TOKEN_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -285,8 +290,17 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _models_ready(local_repo: Path) -> dict[str, bool]:
+    ready = models_ready(local_repo)
+    ready["mel_band_roformer"] = is_model_ready("mel_band_roformer", local_repo)
+    ready[ECAPA_MODEL_ID] = is_ecapa_ready()
+    return ready
+
+
 def _require_local_model(params: dict[str, Any]) -> None:
     """Numpy-free fail-closed check. Never fetches weights."""
+    if str(params.get("mode") or "") == "tse":
+        require_ecapa()
     model_name = str(params.get("model") or "")
     if model_name == "mel_band_roformer":
         from perfectvoice_engine.roformer.separator import is_roformer_ready
@@ -597,8 +611,7 @@ class EngineHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/v1/health":
-            ready = models_ready(self.server.local_repo)
-            ready["mel_band_roformer"] = is_model_ready("mel_band_roformer", self.server.local_repo)
+            ready = _models_ready(self.server.local_repo)
             self._json(
                 200,
                 {
@@ -610,8 +623,7 @@ class EngineHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/v1/capabilities":
-            ready = models_ready(self.server.local_repo)
-            ready["mel_band_roformer"] = is_model_ready("mel_band_roformer", self.server.local_repo)
+            ready = _models_ready(self.server.local_repo)
             self._json(
                 200,
                 {
@@ -747,6 +759,8 @@ class EngineHandler(BaseHTTPRequestHandler):
             store = SpeakerStore()
             profile = store.enroll(name=name, embedding=embedding, sample_duration_s=dur_s)
             self._json(200, {"ok": True, "speaker": profile.to_dict()})
+        except SpeakerEncoderNotInstalled as exc:
+            self._json(409, {"error": "model_not_installed", "model": ECAPA_MODEL_ID, "detail": str(exc)})
         except Exception as exc:
             self._json(500, {"error": "enrollment_failed", "detail": str(exc)})
 
@@ -792,7 +806,7 @@ class EngineHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": "validation_error", "detail": "expected {name}"})
             return
         name = body["name"]
-        if not isinstance(name, str) or name not in ALLOWED_MODELS:
+        if not isinstance(name, str) or name not in DOWNLOADABLE_MODELS:
             self._json(400, {"error": "validation_error", "detail": "unknown model"})
             return
         want_sse = "text/event-stream" in (self.headers.get("Accept") or "")

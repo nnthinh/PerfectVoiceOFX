@@ -28,7 +28,7 @@ PerfectVoice vận hành theo **pipeline 2-Pass Hybrid**:
 1. Ingest **source-file extract** theo contract §3.3 (reject retime / FX / thiếu File Path).
 2. Resample → 44.1 kHz stereo (native Mel-Band RoFormer).
 3. **Pass 1 (Vocal Separation):** Bóc tách vocal stem bằng **Mel-Band RoFormer** (SOTA 44.1kHz) bóc sạch toàn bộ nhạc nền, trống, bass, nhạc cụ.
-4. **Pass 2 (Target Speaker Extraction):** Trích xuất voiceprint 192 chiều từ vị trí Playhead (ECAPA-TDNN), áp dụng Cosine Similarity Masking + Hanning Window Smoothing để dập tắt lời hát bè (background lyrics) và tạp âm còn sót lại (-60dB).
+4. **Pass 2 (Target Speaker Extraction):** Encoder ECAPA-TDNN **đã huấn luyện sẵn** (SpeechBrain `spkrec-ecapa-voxceleb`, Apache-2.0, ~83 MB, user click tải, kiểm sha256) trích voiceprint 192 chiều tại Playhead hoặc từ speaker đã enroll; chấm cosine similarity từng cửa sổ 0.75 s của vocal stem, gain mượt (Hann ~100 ms) xuống sàn -60 dB cho giọng không khớp. Không cần dữ liệu huấn luyện; ngưỡng 0.20/0.45 cần hiệu chỉnh trên clip thật. Thiếu encoder → fail closed (`SpeakerEncoderNotInstalled`).
 5. Wet/dry với mix gốc (cùng sample-rate domain), output gain.
 6. Resample về project rate (thường 48 kHz, đôi khi 96 kHz).
 7. Ghi WAV + BWF, import non-destructive lên track `PV Isolated Voice`.

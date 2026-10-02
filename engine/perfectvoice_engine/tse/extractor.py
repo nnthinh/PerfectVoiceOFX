@@ -1,207 +1,187 @@
-"""Target Speaker Extractor (TSE Extractor).
+"""Target speaker gating on top of the separated vocal stem.
 
-Isolates a target speaker's voice from background singing and competing speech
-conditioned on an ECAPA-TDNN 192-dimensional speaker embedding.
+Pass 2 slides a window over the vocals, embeds each window with the
+pretrained ECAPA-TDNN encoder and compares it to the target voiceprint.
+Windows that do not sound like the target (backing singers, other talkers)
+are attenuated down to ``min_gain_db``; the per-window gains are
+interpolated and smoothed into a sample-accurate envelope, so output length
+and timing never change.
+
+Pure-numpy helpers (``similarity_to_gain``, ``gain_envelope``) import no
+torch; the encoder is imported only when no ``embed_fn`` is injected.
 """
 
 from __future__ import annotations
 
-import math
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
+
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 from perfectvoice_engine.constants import raise_if_cancelled
-from perfectvoice_engine.tse.encoder import EMBEDDING_DIM, extract_embedding
+from perfectvoice_engine.tse.audio import ENCODER_SAMPLE_RATE, to_encoder_rate
 
-N_FFT = 1024
-HOP_LENGTH = 256
-WIN_LENGTH = 1024
+FRAME_SECONDS = 0.75
+HOP_SECONDS = 0.1875
+SILENCE_RMS = 1e-4
+EMBED_BATCH = 16
 
-
-class TargetSpeakerModel(nn.Module):
-    """Deep Time-Frequency Target Speaker Extractor Network."""
-
-    def __init__(
-        self,
-        embed_dim: int = EMBEDDING_DIM,
-        channels: int = 64,
-        num_blocks: int = 4,
-    ) -> None:
-        super().__init__()
-        self.in_conv = nn.Conv2d(2, channels, kernel_size=3, padding=1)
-        self.out_conv = nn.Conv2d(channels, 2, kernel_size=3, padding=1)
-
-    def forward(self, spec_complex: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
-        h = F.relu(self.in_conv(spec_complex))
-        mask = torch.sigmoid(self.out_conv(h))
-        return spec_complex * mask
+EmbedFn = Callable[[np.ndarray], np.ndarray]
 
 
-_DEFAULT_TSE_MODEL: TargetSpeakerModel | None = None
+def similarity_to_gain(
+    cos_sim: np.ndarray | float,
+    *,
+    low: float = 0.20,
+    high: float = 0.45,
+    min_gain: float = 0.001,
+) -> np.ndarray:
+    """Cosine similarity → linear gain in [min_gain, 1]."""
+    if high <= low:
+        raise ValueError("sim_threshold_high must exceed sim_threshold_low")
+    conf = np.clip((np.asarray(cos_sim, dtype=np.float32) - low) / (high - low), 0.0, 1.0)
+    return (min_gain + (1.0 - min_gain) * conf ** 1.5).astype(np.float32)
 
 
-def get_tse_model(device: torch.device | str = "cpu") -> TargetSpeakerModel:
-    global _DEFAULT_TSE_MODEL
-    if _DEFAULT_TSE_MODEL is None:
-        model = TargetSpeakerModel()
-        model.eval()
-        _DEFAULT_TSE_MODEL = model
-    return _DEFAULT_TSE_MODEL.to(device)
+def gain_envelope(
+    centers: np.ndarray,
+    gains: np.ndarray,
+    total_samples: int,
+    sample_rate: int,
+    min_gain: float,
+) -> np.ndarray:
+    """Per-frame gains → smoothed per-sample envelope (Hann, ~100 ms)."""
+    idx = np.arange(total_samples, dtype=np.float32)
+    env = np.interp(idx, centers, gains, left=gains[0], right=gains[-1])
+    size = max(int(sample_rate * 0.1), 3)
+    if size % 2 == 0:
+        size += 1
+    window = np.hanning(size)
+    window /= np.sum(window)
+    # Edge-pad so the envelope does not dip toward zero at clip boundaries.
+    half = size // 2
+    padded = np.pad(env, (half, half), mode="edge")
+    smoothed = np.convolve(padded, window, mode="valid")
+    return np.clip(smoothed, min_gain, 1.0).astype(np.float32)
+
+
+def _frame_starts(total: int, frame_len: int, hop_len: int) -> list[int]:
+    if total <= frame_len:
+        return [0]
+    return list(range(0, total - frame_len // 2, hop_len))
 
 
 def extract_target_speaker(
-    waveform: np.ndarray | torch.Tensor,
+    waveform: Any,
     embedding: np.ndarray | Sequence[float],
     sample_rate: int = 44100,
     *,
-    device: torch.device | str | None = None,
+    device: Any = None,
     cancel_event: object | None = None,
     on_progress: Callable[[dict[str, object]], None] | None = None,
     sim_threshold_low: float = 0.20,
     sim_threshold_high: float = 0.45,
     min_gain_db: float = -60.0,
+    embed_fn: EmbedFn | None = None,
 ) -> np.ndarray:
-    """Isolate target speaker voice by discriminative voiceprint similarity gating.
+    """Attenuate everything in ``waveform`` (C, T) that is not the target voice.
 
-    Args:
-        waveform: Audio samples (C, T) in float32
-        embedding: 192-dim target speaker voiceprint vector
-        sample_rate: Audio sample rate (e.g. 44100)
-        device: Torch compute device (Apple Metal MPS / CPU)
-        cancel_event: Cancellation signal
-        on_progress: Callback for progress updates
-        sim_threshold_low: Cosine similarity below which voice is fully suppressed
-        sim_threshold_high: Cosine similarity above which voice is fully kept
-        min_gain_db: Background vocal attenuation floor in dB (e.g. -34 dB)
-
-    Returns:
-        Clean isolated target speaker waveform (C, T) as float32 numpy array
+    ``embed_fn`` maps equal-length 16 kHz mono windows (N, L) to unit
+    voiceprints (N, 192). Default: the pretrained ECAPA encoder, which
+    raises ``SpeakerEncoderNotInstalled`` when its weights are missing.
     """
     raise_if_cancelled(cancel_event)
 
-    if isinstance(waveform, torch.Tensor):
-        audio_np = waveform.detach().cpu().numpy().astype(np.float32)
-    else:
-        audio_np = np.asarray(waveform, dtype=np.float32)
+    if hasattr(waveform, "detach"):
+        waveform = waveform.detach().cpu().numpy()
+    audio = np.asarray(waveform, dtype=np.float32)
+    if audio.ndim == 1:
+        audio = audio[np.newaxis, :]
+    _channels, total = audio.shape
+    if total == 0:
+        return audio.copy()
 
-    if audio_np.ndim == 1:
-        audio_np = audio_np[np.newaxis, :]
+    if embed_fn is None:
+        from perfectvoice_engine.tse.encoder import embed_batch_16k, get_speaker_encoder
 
-    num_channels, total_samples = audio_np.shape
-    target_vec = np.asarray(embedding, dtype=np.float32)
-    norm_t = np.linalg.norm(target_vec)
-    if norm_t > 1e-6:
-        target_vec = target_vec / norm_t
+        get_speaker_encoder(device)  # fail closed before any work
 
-    min_gain = float(10.0 ** (min_gain_db / 20.0))  # e.g. ~0.02
+        def embed_fn(segs: np.ndarray) -> np.ndarray:
+            return embed_batch_16k(segs, device=device)
 
-    # Frame parameters for speaker similarity analysis (750ms window, 187.5ms hop)
-    frame_len = max(int(sample_rate * 0.75), 1024)
-    hop_len = max(int(sample_rate * 0.1875), 256)
+    mono16 = to_encoder_rate(audio, sample_rate)
 
-    # Compute mono mix for speaker voiceprint estimation
-    mono_audio = np.mean(audio_np, axis=0)
+    target = np.asarray(embedding, dtype=np.float32).reshape(-1)
+    target = target / max(float(np.linalg.norm(target)), 1e-12)
+    min_gain = float(10.0 ** (min_gain_db / 20.0))
 
-    # Calculate frame starts
-    if total_samples <= frame_len:
-        starts = [0]
-    else:
-        starts = list(range(0, total_samples - frame_len // 2, hop_len))
+    frame_len = max(int(sample_rate * FRAME_SECONDS), 1024)
+    hop_len = max(int(sample_rate * HOP_SECONDS), 256)
+    starts = _frame_starts(total, frame_len, hop_len)
+    n_frames = len(starts)
+    mono = audio.mean(axis=0)
 
-    frame_centers = []
-    frame_gains = []
-    total_frames = len(starts)
-    last_log_milestone = -1
+    flen16 = max(int(round(frame_len * ENCODER_SAMPLE_RATE / sample_rate)), 400)
+    if mono16.shape[0] < flen16:
+        mono16 = np.pad(mono16, (0, flen16 - mono16.shape[0]))
+    n16 = mono16.shape[0]
 
-    for idx, start in enumerate(starts):
+    centers = np.empty(n_frames, dtype=np.float32)
+    gains = np.full(n_frames, min_gain, dtype=np.float32)
+    voiced: list[int] = []
+    for i, start in enumerate(starts):
+        end = min(total, start + frame_len)
+        centers[i] = (start + end) / 2.0
+        chunk = mono[start:end]
+        if float(np.sqrt(np.mean(chunk ** 2) + 1e-12)) >= SILENCE_RMS:
+            voiced.append(i)
+
+    last_milestone = -1
+    for b in range(0, max(len(voiced), 1), EMBED_BATCH):
         raise_if_cancelled(cancel_event)
-        end = min(total_samples, start + frame_len)
-        chunk = mono_audio[start:end]
-        center = (start + end) / 2.0
-        frame_centers.append(center)
+        batch = voiced[b : b + EMBED_BATCH]
+        if batch:
+            segs = np.empty((len(batch), flen16), dtype=np.float32)
+            for row, i in enumerate(batch):
+                s16 = min(int(round(starts[i] * ENCODER_SAMPLE_RATE / sample_rate)), n16 - flen16)
+                segs[row] = mono16[s16 : s16 + flen16]
+            embeds = np.asarray(embed_fn(segs), dtype=np.float32)
+            sims = embeds @ target
+            gains[batch] = similarity_to_gain(
+                sims, low=sim_threshold_low, high=sim_threshold_high, min_gain=min_gain
+            )
 
-        # Check energy level
-        rms = float(np.sqrt(np.mean(chunk**2) + 1e-12))
-        if rms < 1e-4:
-            # Silence / ambient noise floor
-            frame_gains.append(min_gain)
-        else:
-            # Extract frame voiceprint
-            frame_embed = extract_embedding(chunk[np.newaxis, :], sample_rate=sample_rate, device=device)
-            norm_f = np.linalg.norm(frame_embed)
-            if norm_f > 1e-6:
-                frame_embed = frame_embed / norm_f
-                cos_sim = float(np.dot(frame_embed, target_vec))
-            else:
-                cos_sim = 0.0
-
-            # Map cosine similarity to confidence [0.0, 1.0]
-            if cos_sim <= sim_threshold_low:
-                conf = 0.0
-            elif cos_sim >= sim_threshold_high:
-                conf = 1.0
-            else:
-                conf = (cos_sim - sim_threshold_low) / (sim_threshold_high - sim_threshold_low)
-
-            # Calculate target gain
-            gain = min_gain + (1.0 - min_gain) * (conf ** 1.5)
-            frame_gains.append(gain)
-
-        pct_int = int(((idx + 1) / total_frames) * 100)
-        msg = None
-        if pct_int % 10 == 0 and pct_int != last_log_milestone:
-            msg = f"Isolating target speaker voice ({pct_int}%)..."
-            last_log_milestone = pct_int
-        elif idx == total_frames - 1 and last_log_milestone < 100:
-            msg = "Isolating target speaker voice (100%)..."
-            last_log_milestone = 100
-
-        if on_progress is not None and (idx % 2 == 0 or idx == total_frames - 1 or msg is not None):
-            chunk_pct = round(((idx + 1) / total_frames) * 100, 1)
-            dur_s = round(float(total_samples) / float(sample_rate), 2)
-            pos_s = round(float(end) / float(sample_rate), 2)
-            payload = {
+        done = min(len(voiced), b + EMBED_BATCH)
+        frame_idx = (batch[-1] + 1) if batch else n_frames
+        if done >= len(voiced):
+            frame_idx = n_frames
+        if on_progress is not None:
+            chunk_pct = round(frame_idx / n_frames * 100, 1)
+            pct_int = int(chunk_pct)
+            payload: dict[str, object] = {
                 "stage_name": "Pass 2/2: Target Speaker Filter (-60dB)",
-                "overall_pct": round(50.0 + (chunk_pct * 0.5), 1),
+                "overall_pct": round(50.0 + chunk_pct * 0.5, 1),
                 "current_pass": 2,
                 "total_passes": 2,
-                "chunk_idx": idx + 1,
-                "total_chunks": total_frames,
+                "chunk_idx": frame_idx,
+                "total_chunks": n_frames,
                 "chunk_pct": chunk_pct,
-                "segment_offset": start,
-                "audio_length": total_samples,
-                "audio_dur_s": dur_s,
-                "current_pos_s": pos_s,
+                "segment_offset": starts[frame_idx - 1],
+                "audio_length": total,
+                "audio_dur_s": round(total / float(sample_rate), 2),
+                "current_pos_s": round(min(total, starts[frame_idx - 1] + frame_len) / float(sample_rate), 2),
             }
-            if msg is not None:
-                payload["message"] = msg
+            milestone = pct_int // 10 * 10
+            if milestone > last_milestone:
+                payload["message"] = f"Isolating target speaker voice ({milestone}%)..."
+                last_milestone = milestone
             on_progress(payload)
 
-    if not frame_centers:
-        return audio_np
+    env = gain_envelope(centers, gains, total, sample_rate, min_gain)
+    return (audio * env[np.newaxis, :]).astype(np.float32)
 
-    # Smooth interpolation of gains across all sample points
-    sample_indices = np.arange(total_samples, dtype=np.float32)
-    gain_envelope = np.interp(
-        sample_indices,
-        np.array(frame_centers, dtype=np.float32),
-        np.array(frame_gains, dtype=np.float32),
-        left=frame_gains[0],
-        right=frame_gains[-1],
-    )
 
-    # Smooth the envelope with a moving average filter (~100ms) to eliminate transients
-    filter_size = max(int(sample_rate * 0.1), 3)
-    if filter_size % 2 == 0:
-        filter_size += 1
-    window = np.hanning(filter_size)
-    window /= np.sum(window)
-    gain_envelope_smoothed = np.convolve(gain_envelope, window, mode="same")
-    gain_envelope_smoothed = np.clip(gain_envelope_smoothed, min_gain, 1.0)
-
-    # Apply the smooth gain envelope to each channel
-    isolated = audio_np * gain_envelope_smoothed[np.newaxis, :]
-    return isolated.astype(np.float32)
+__all__ = [
+    "extract_target_speaker",
+    "gain_envelope",
+    "similarity_to_gain",
+]

@@ -12,6 +12,8 @@ from typing import Any
 
 import numpy as np
 
+from perfectvoice_engine.tse.weights import ENCODER_ID
+
 
 @dataclass
 class SpeakerProfile:
@@ -20,6 +22,7 @@ class SpeakerProfile:
     embedding: list[float]
     sample_duration_s: float
     created_at: str
+    encoder_id: str = ENCODER_ID
 
     def to_numpy(self) -> np.ndarray:
         return np.array(self.embedding, dtype=np.float32)
@@ -58,6 +61,9 @@ class SpeakerStore:
         try:
             raw = json.loads(self.file.read_text(encoding="utf-8"))
             for item in raw.get("speakers", []):
+                # Voiceprints from another encoder live in a different space.
+                if item.get("encoder_id") != ENCODER_ID:
+                    continue
                 p = SpeakerProfile(
                     speaker_id=item["speaker_id"],
                     name=item["name"],
@@ -72,7 +78,7 @@ class SpeakerStore:
     def _save(self) -> None:
         self.file.parent.mkdir(parents=True, exist_ok=True)
         data = {
-            "version": 1,
+            "version": 2,
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "speakers": [asdict(p) for p in self._profiles.values()],
         }
