@@ -32,9 +32,9 @@ clip on timeline  →  inspect + reject  →  sidecar job
 ```
 
 - **Pass 1 (Vocal Separation):** SOTA **[Mel-Band RoFormer](https://github.com/lucidrains/mel-band-roformer)** (`Kimberley Jensen` Studio 44.1kHz model) / Meta Demucs `htdemucs_ft`. Music source separation — vocals vs. accompaniment/beats/instruments.
-- **Pass 2 (Target Speaker Isolation):** Zero-shot **ECAPA-TDNN TSE** extracts a 192-dimensional voiceprint from your playhead position, applying cosine similarity filtering and Hanning smoothing to eliminate background lyrics and other talkers (-60dB suppression).
+- **Pass 2 (Target Speaker Isolation):** a pretrained **[ECAPA-TDNN](https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb)** speaker encoder (SpeechBrain, VoxCeleb, Apache-2.0) takes a 192-d voiceprint at your playhead (or an enrolled speaker), scores every 0.75 s window of the vocal stem by cosine similarity, and smoothly gates non-matching voices (backing vocals, other talkers) down to -60 dB. Timing and length never change. No training data needed — only the published weights.
 - **Cache** is a full identity hash (48 kHz vs 96 kHz is two keys). Re-run the same clip and you skip infer.
-- **Weights are fetched on-demand.** First use: auto-downloads official Kimberley Jensen SOTA checkpoint (~871 MB) with real-time download progress. Infer only loads local weights. Jobs never phone home.
+- **Weights are fetched on-demand.** One click downloads the official Kimberley Jensen checkpoint (~871 MB) and the ECAPA speaker encoder (~83 MB) with live progress. Each file is sha256-verified (pinned digest or the Hub's LFS hash) before it is published, and checkpoints load with `torch.load(weights_only=True)`. Infer only loads local weights. Jobs never phone home.
 
 ## What it is not
 
@@ -130,7 +130,9 @@ Public preview. First open-source release.
 | Done | Next |
 | --- | --- |
 | Panel + sidecar + reject matrix | Live Resolve dump to pin speed / reverse / Elastic Wave keys |
-| Mel-Band RoFormer SOTA 44.1kHz + Zero-shot TSE | PyInstaller onedir (no user Python) |
+| Mel-Band RoFormer SOTA 44.1kHz + pretrained ECAPA-TDNN TSE | Calibrate TSE thresholds on real dialogue-over-music clips |
+| Verified Hub downloads, `weights_only` loads | Pin Hub sha256 (`scripts/pin_model_hashes.py --write`) |
+| | PyInstaller onedir (no user Python) |
 | macOS user-space installer | Developer ID + notarize |
 | Windows installer sketches | CUDA engine SKU |
 
@@ -150,5 +152,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT
 Plugin **Workflow Integration** cho DaVinci Resolve **Studio**: chọn clip → *Clean voice* → track `PV Isolated Voice` đồng bộ sample. Engine là sidecar Python (Mel-Band RoFormer Studio AI + Target Speaker Extraction), **không** phải OpenFX.
 
 - Mạnh với **bóc tách giọng hát / lời thoại khỏi nhạc nền, beat, và dập tắt lời hát bè (-60dB)** nhờ kiến trúc 2-Pass (RoFormer + TSE).
-- Tự động tải checkpoint SOTA Kimberley Jensen (~871 MB) khi mở lần đầu với giao diện hiển thị tiến trình thời gian thực.
+- Tự động tải checkpoint SOTA Kimberley Jensen (~871 MB) và encoder giọng nói ECAPA-TDNN đã huấn luyện sẵn (~83 MB, SpeechBrain VoxCeleb) khi bấm *Download model*; mọi file đều được kiểm sha256 trước khi dùng.
 - Thiết kế đầy đủ: [docs/design.md](docs/design.md).

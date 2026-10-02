@@ -10,6 +10,8 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import re
+import shutil
 import ssl
 import tempfile
 import urllib.error
@@ -23,6 +25,14 @@ from perfectvoice_engine.models import (
     files_for,
     require_model,
     sha256_file,
+)
+from perfectvoice_engine.tse.weights import (
+    ECAPA_FILENAME,
+    ECAPA_MIN_BYTES,
+    ECAPA_MODEL_ID,
+    ENCODER_ID,
+    ecapa_checkpoint_path,
+    is_ecapa_ready,
 )
 
 # Official hosts only. Path must stay under these prefixes (no user URL).
@@ -253,69 +263,12 @@ def download_model(
     progress: ProgressFn | None = None,
 ) -> dict[str, str]:
     """Fetch ``name`` into ``local_repo``. Skip files that already hash-match."""
-    if name not in ALLOWED_MODELS:
+    if name not in DOWNLOADABLE_MODELS:
         raise ValueError(f"unknown model {name!r}")
+    if name == ECAPA_MODEL_ID:
+        return download_speaker_encoder(progress=progress)
     if name == "mel_band_roformer":
-        from perfectvoice_engine.roformer.separator import _get_roformer_dir, is_roformer_ready
-        d = _get_roformer_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        cfg_dest = d / "config_vocals_mel_band_roformer_kj.yaml"
-        ckpt_dest = d / "MelBandRoformer.ckpt"
-
-        # 1. Setup config from package or copy
-        if not cfg_dest.is_file() or cfg_dest.stat().st_size < 100:
-            pkg_cfg = Path(__file__).resolve().parent / "roformer" / "config_vocals_mel_band_roformer_kj.yaml"
-            if pkg_cfg.is_file():
-                import shutil
-                shutil.copyfile(pkg_cfg, cfg_dest)
-
-        # 2. Download checkpoint if missing or size < 800MB
-        if not ckpt_dest.is_file() or ckpt_dest.stat().st_size < 800_000_000:
-            dest = ckpt_dest
-            tmp_fd, tmp_name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=".part", dir=dest.parent)
-            tmp_path = Path(tmp_name)
-            written = 0
-            url = "https://huggingface.co/KimberleyJSN/melbandroformer/resolve/main/MelBandRoformer.ckpt"
-            req = urllib.request.Request(
-                url,
-                method="GET",
-                headers={"User-Agent": _UA},
-            )
-            opener = urllib.request.build_opener(
-                urllib.request.HTTPSHandler(context=_ssl_context()),
-            )
-            try:
-                with os.fdopen(tmp_fd, "wb") as out, opener.open(req, timeout=600.0) as resp:
-                    total_header = resp.headers.get("Content-Length")
-                    try:
-                        total = int(total_header) if total_header else 913106900
-                    except (TypeError, ValueError):
-                        total = 913106900
-                    if progress is not None:
-                        progress("Mel-Band RoFormer Studio AI (44.1kHz)", 0, total)
-                    while True:
-                        chunk = resp.read(_CHUNK)
-                        if not chunk:
-                            break
-                        written += len(chunk)
-                        out.write(chunk)
-                        if progress is not None:
-                            progress("Mel-Band RoFormer Studio AI (44.1kHz)", written, total)
-                    out.flush()
-                    os.fsync(out.fileno())
-                os.replace(tmp_path, dest)
-                try:
-                    os.chmod(dest, 0o600)
-                except OSError:
-                    pass
-            except Exception:
-                try:
-                    tmp_path.unlink()
-                except OSError:
-                    pass
-                raise
-        return require_model("mel_band_roformer", repo)
-
+        return download_roformer(progress=progress)
     files = files_for(name, manifest)
     repo = Path(local_repo)
     _ensure_repo_dir(repo)
@@ -362,8 +315,191 @@ def download_model(
     return require_model(name, repo, manifest=manifest)
 
 
+# --- Hub LFS checkpoints (Mel-Band RoFormer, ECAPA speaker encoder) --------
+#
+# Large LFS files 302 from huggingface.co to a *.hf.co CDN. The redirect
+# carries ``X-Linked-Etag`` = the file's sha256; the download is verified
+# against a pinned digest when one is set, else against that header. No
+# digest at all → refuse (fail closed). Pin with scripts/pin_model_hashes.py.
+ROFORMER_URL = "https://huggingface.co/KimberleyJSN/melbandroformer/resolve/main/MelBandRoformer.ckpt"
+ECAPA_URL = "https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/embedding_model.ckpt"
+HUB_URLS = frozenset({ROFORMER_URL, ECAPA_URL})
+HUB_PINS: dict[str, str | None] = {
+    ROFORMER_URL: None,
+    ECAPA_URL: None,
+}
+_HUB_REDIRECT_SUFFIXES = (".hf.co", ".huggingface.co")
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+DOWNLOADABLE_MODELS = frozenset(ALLOWED_MODELS | {ECAPA_MODEL_ID})
+
+
+class UnverifiedDownload(WeightFetchError):
+    pass
+
+
+def assert_hub_url_allowed(url: str) -> str:
+    """Hub files: the exact pinned URLs, or redirects onto Hugging Face's CDN."""
+    text = str(url).strip()
+    if text in HUB_URLS:
+        return text
+    parsed = urlparse(text)
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme == "https"
+        and not parsed.username
+        and not parsed.password
+        and (host == "huggingface.co" or host.endswith(_HUB_REDIRECT_SUFFIXES))
+    ):
+        return text
+    raise HostNotAllowed(text)
+
+
+def _etag_digest(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    if text.startswith("W/"):
+        text = text[2:]
+    text = text.strip('"').lower()
+    return text if _SHA256_HEX.match(text) else None
+
+
+class _HubRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, seen: dict[str, str]) -> None:
+        super().__init__()
+        self.seen = seen
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        assert_hub_url_allowed(newurl)
+        digest = _etag_digest(headers.get("X-Linked-Etag")) or _etag_digest(headers.get("ETag"))
+        if digest and "sha256" not in self.seen:
+            self.seen["sha256"] = digest
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_hub(url: str, seen: dict[str, str], timeout: float | None = 600.0):
+    if url not in HUB_URLS:
+        raise HostNotAllowed(url)
+    req = urllib.request.Request(url, method="GET", headers={"User-Agent": _UA})
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=_ssl_context()),
+        _HubRedirectHandler(seen),
+    )
+    resp = opener.open(req, timeout=timeout)
+    final = getattr(resp, "headers", None)
+    if final is not None and "sha256" not in seen:
+        digest = _etag_digest(final.get("X-Linked-Etag")) or _etag_digest(final.get("ETag"))
+        if digest:
+            seen["sha256"] = digest
+    return resp
+
+
+def _fetch_hub_file(
+    url: str,
+    dest: Path,
+    *,
+    label: str,
+    min_bytes: int,
+    progress: ProgressFn | None,
+) -> str:
+    """Stream ``url`` to ``dest`` atomically; publish only if the sha256 verifies."""
+    pinned = HUB_PINS.get(url)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=".part", dir=dest.parent)
+    tmp_path = Path(tmp_name)
+    digest = hashlib.sha256()
+    seen: dict[str, str] = {}
+    written = 0
+    try:
+        with os.fdopen(tmp_fd, "wb") as out:
+            with _open_hub(url, seen) as resp:
+                try:
+                    total = int(resp.headers.get("Content-Length") or 0)
+                except (TypeError, ValueError):
+                    total = 0
+                if total > MAX_DOWNLOAD_BYTES:
+                    raise DownloadTooLarge(f"{label} Content-Length {total} exceeds {MAX_DOWNLOAD_BYTES}")
+                if progress is not None:
+                    progress(label, 0, total)
+                while True:
+                    chunk = resp.read(_CHUNK)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_DOWNLOAD_BYTES:
+                        raise DownloadTooLarge(f"{label} exceeded {MAX_DOWNLOAD_BYTES} bytes")
+                    out.write(chunk)
+                    digest.update(chunk)
+                    if progress is not None:
+                        progress(label, written, total)
+            out.flush()
+            os.fsync(out.fileno())
+        actual = digest.hexdigest()
+        expected = pinned or seen.get("sha256")
+        if not expected:
+            raise UnverifiedDownload(
+                f"{label}: no pinned or Hub-advertised sha256; refusing unverified weights"
+            )
+        if actual != expected:
+            raise ChecksumMismatch(dest.name, expected, actual)
+        if written < min_bytes:
+            raise WeightFetchError(f"{label}: {written} bytes is smaller than expected")
+        os.replace(tmp_path, dest)
+        try:
+            os.chmod(dest, 0o600)
+        except OSError:
+            pass
+        return actual
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def download_roformer(*, progress: ProgressFn | None = None) -> dict[str, str]:
+    from perfectvoice_engine.roformer.separator import ROFORMER_MIN_BYTES, _get_roformer_dir
+
+    d = _get_roformer_dir()
+    cfg_dest = d / "config_vocals_mel_band_roformer_kj.yaml"
+    if not cfg_dest.is_file() or cfg_dest.stat().st_size < 100:
+        pkg_cfg = Path(__file__).resolve().parent / "roformer" / cfg_dest.name
+        shutil.copyfile(pkg_cfg, cfg_dest)
+    ckpt_dest = d / "MelBandRoformer.ckpt"
+    if not ckpt_dest.is_file() or ckpt_dest.stat().st_size < ROFORMER_MIN_BYTES:
+        _fetch_hub_file(
+            ROFORMER_URL,
+            ckpt_dest,
+            label="Mel-Band RoFormer Studio AI (44.1kHz)",
+            min_bytes=ROFORMER_MIN_BYTES,
+            progress=progress,
+        )
+    return require_model("mel_band_roformer", d)
+
+
+def download_speaker_encoder(*, progress: ProgressFn | None = None) -> dict[str, str]:
+    dest = ecapa_checkpoint_path()
+    if not is_ecapa_ready():
+        _fetch_hub_file(
+            ECAPA_URL,
+            dest,
+            label="ECAPA-TDNN speaker encoder (VoxCeleb)",
+            min_bytes=ECAPA_MIN_BYTES,
+            progress=progress,
+        )
+    return {ECAPA_FILENAME: ENCODER_ID}
+
+
 __all__ = [
     "ALLOWED_URL_PREFIXES",
+    "DOWNLOADABLE_MODELS",
+    "ECAPA_URL",
+    "ROFORMER_URL",
+    "UnverifiedDownload",
+    "assert_hub_url_allowed",
+    "download_roformer",
+    "download_speaker_encoder",
     "ChecksumMismatch",
     "DownloadTooLarge",
     "FetchAborted",

@@ -74,6 +74,38 @@ def _require_enhancer(params: Mapping[str, Any]) -> None:
         raise EnhancerNotInstalled()
 
 
+def tse_weights_digest(params: Mapping[str, Any], base_digest: str) -> str:
+    """Fold Pass 2 identity into the weights digest (music mode: unchanged).
+
+    TSE output depends on the encoder, the target voiceprint and the
+    reference window, none of which are hash-v1 fields.
+    """
+    if str(params.get("mode") or "music") != "tse":
+        return base_digest
+    from perfectvoice_engine.tse.weights import ENCODER_ID
+
+    speaker_id = str(params.get("speaker_id") or "")
+    embedding_sig = ""
+    if speaker_id:
+        from perfectvoice_engine.tse.store import SpeakerStore
+
+        profile = SpeakerStore().get(speaker_id)
+        if profile is not None:
+            embedding_sig = hashlib.sha256(
+                np.asarray(profile.embedding, dtype=np.float32).tobytes()
+            ).hexdigest()
+    parts = [
+        base_digest,
+        "tse",
+        ENCODER_ID,
+        speaker_id,
+        embedding_sig,
+        repr(params.get("ref_sample_t0")),
+        repr(params.get("ref_sample_t1")),
+    ]
+    return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
+
+
 def clip_input_hash(
     clip: Mapping[str, Any],
     params: Mapping[str, Any],
@@ -247,6 +279,7 @@ def process_clip(
             if weights_digest is not None
             else weights_sha256(files_for(name))
         )
+    digest = tse_weights_digest(params, digest)
     source = Path(str(clip["source_path"]))
     file_id = file_id_from_path(source)
     input_hash = clip_input_hash(clip, params, file_id=file_id, weights_digest=digest)
@@ -281,6 +314,10 @@ def process_clip(
                 raise ModelNotInstalled("mel_band_roformer", "weights not found in Application Support")
         else:
             require_model(name, repo)
+        if str(params.get("mode") or "music") == "tse":
+            from perfectvoice_engine.tse.weights import require_ecapa
+
+            require_ecapa()
     _require_enhancer(params)
 
     raise_if_cancelled(cancel_event)
@@ -532,4 +569,5 @@ __all__ = [
     "job_model_name",
     "process_clip",
     "run_job",
+    "tse_weights_digest",
 ]

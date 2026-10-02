@@ -91,3 +91,16 @@ PyTorch, torchaudio, soxr, and the host Electron/Chromium inside
 DaVinci Resolve Studio have their own licenses. Notices for binaries
 that a future installer actually ships will be added next to those
 binaries.
+
+
+SpeechBrain ECAPA-TDNN (speaker encoder) — Apache-2.0
+-----------------------------------------------------
+
+`engine/perfectvoice_engine/tse/encoder.py` re-implements the ECAPA-TDNN
+network and Fbank front end of SpeechBrain (https://github.com/speechbrain/speechbrain,
+Apache License 2.0, Copyright SpeechBrain contributors) so that the
+pretrained `speechbrain/spkrec-ecapa-voxceleb` checkpoint loads without the
+`speechbrain` package. The checkpoint (Apache-2.0, trained on VoxCeleb 1+2)
+is not bundled: the user clicks **Download model** and the engine fetches
+`embedding_model.ckpt` from the official Hugging Face repo, verifying its
+sha256 before use. See docs/licenses/speechbrain-ecapa.md.

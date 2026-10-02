@@ -14,6 +14,8 @@ from typing import Any, Callable
 from perfectvoice_engine.constants import raise_if_cancelled
 
 ROFORMER_SR = 44100
+# The KJ checkpoint is ~913 MB; anything far smaller is a truncated download.
+ROFORMER_MIN_BYTES = 800_000_000
 _MODEL_CACHE: dict[str, Any] = {}
 
 
@@ -38,7 +40,7 @@ def is_roformer_ready() -> bool:
     d = _get_roformer_dir()
     ckpt = d / "MelBandRoformer.ckpt"
     cfg = d / "config_vocals_mel_band_roformer_kj.yaml"
-    return ckpt.exists() and cfg.exists() and ckpt.stat().st_size > 800_000_000
+    return ckpt.exists() and cfg.exists() and ckpt.stat().st_size >= ROFORMER_MIN_BYTES
 
 
 def resolve_roformer_device(requested: str | None = None) -> str:
@@ -79,7 +81,8 @@ def get_roformer_model(device: str | None = None) -> Any:
     model_args["flash_attn"] = False
     model = MelBandRoformer(**model_args)
 
-    state_dict = torch.load(ckpt_file, map_location="cpu", weights_only=False)
+    # weights_only: a tampered checkpoint must not be able to run pickle code.
+    state_dict = torch.load(ckpt_file, map_location="cpu", weights_only=True)
     if "state" in state_dict:
         state_dict = state_dict["state"]
     elif "model" in state_dict:

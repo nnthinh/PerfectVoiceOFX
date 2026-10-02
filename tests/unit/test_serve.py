@@ -443,7 +443,13 @@ class SidecarHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         assert isinstance(body, dict)
         from perfectvoice_engine.roformer.separator import is_roformer_ready
-        expected_ready = {"htdemucs": False, "htdemucs_ft": False, "mel_band_roformer": is_roformer_ready()}
+        from perfectvoice_engine.tse.weights import is_ecapa_ready
+        expected_ready = {
+            "htdemucs": False,
+            "htdemucs_ft": False,
+            "mel_band_roformer": is_roformer_ready(),
+            "ecapa_voxceleb": is_ecapa_ready(),
+        }
         self.assertEqual(body.get("models_ready"), expected_ready)
         self.assertNotIn(eng.token, eng.stderr_text())
 
@@ -466,7 +472,13 @@ class SidecarHttpTests(unittest.TestCase):
         self.assertIn("devices", body)
         self.assertIn("models_ready", body)
         from perfectvoice_engine.roformer.separator import is_roformer_ready
-        expected_ready = {"htdemucs": False, "htdemucs_ft": False, "mel_band_roformer": is_roformer_ready()}
+        from perfectvoice_engine.tse.weights import is_ecapa_ready
+        expected_ready = {
+            "htdemucs": False,
+            "htdemucs_ft": False,
+            "mel_band_roformer": is_roformer_ready(),
+            "ecapa_voxceleb": is_ecapa_ready(),
+        }
         self.assertEqual(body["models_ready"], expected_ready)
         self.assertEqual(body.get("window_seconds"), 600.0)
         self.assertEqual(body.get("window_overlap_seconds"), 1.0)

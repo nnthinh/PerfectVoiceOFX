@@ -294,12 +294,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
 
     function isModelReady(status, name) {
-        if (name === "mel_band_roformer") {
-            if (!status || !status.health || !status.health.models_ready) return false;
-            return status.health.models_ready.mel_band_roformer === true;
-        }
         if (!status || !status.health || !status.health.models_ready) return false;
-        return !!status.health.models_ready[name];
+        const ready = status.health.models_ready;
+        // Every Clean voice run is TSE: the speaker encoder is part of "ready".
+        // Engines that predate the key do not report it.
+        if (ready.ecapa_voxceleb === false) return false;
+        return ready[name] === true;
     }
 
     function paintDownloadProgress(data) {
@@ -513,7 +513,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         jobError.textContent = "";
         setBadge("running", "Downloading");
         appendLog(`⭐ First-time setup: Mel-Band RoFormer Studio AI model not found locally.`);
-        appendLog(`Downloading official Kimberley Jensen SOTA checkpoint (~871 MB)...`);
+        appendLog(`Downloading official Kimberley Jensen SOTA checkpoint (~871 MB) + ECAPA speaker encoder (~83 MB)...`);
         paintDownloadProgress({ filename: "Mel-Band RoFormer (SOTA 44.1kHz)", bytes_done: 0, bytes_total: 0 });
         syncRunButtons();
         try {
